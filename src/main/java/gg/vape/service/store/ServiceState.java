@@ -5,7 +5,7 @@ import java.util.LinkedHashMap;
 import java.util.Map;
 
 final class ServiceState {
-    long nextUserId = 2L;
+    long nextUserId = 1L;
     long nextPublicProfileId = 1L;
     long nextFriendRequestId = 1L;
     long nextPartyId = 1L;

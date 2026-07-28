@@ -21,6 +21,7 @@ class ZeusServerTest {
     @Test
     void completesCoreOnlineSequence() throws Exception {
         FileStore store = new FileStore(temporaryDirectory.resolve("state.json"));
+        String token = store.loginByUsername("Developer").token();
         try (ZeusServer server = new ZeusServer("127.0.0.1", 0, store)) {
             server.start();
             try (Socket socket = new Socket("127.0.0.1", server.port())) {
@@ -43,7 +44,7 @@ class ZeusServerTest {
                 UUID minecraftId = UUID.randomUUID();
                 writeFrame(output, 2, payload -> {
                     ZeusBuffer.writeUuid(payload, authenticationId);
-                    ZeusBuffer.writeString(payload, "0");
+                    ZeusBuffer.writeString(payload, token);
                     ZeusBuffer.writeUuid(payload, minecraftId);
                     ZeusBuffer.writeString(payload, "Player");
                 });

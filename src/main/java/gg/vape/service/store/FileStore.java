@@ -29,9 +29,6 @@ public final class FileStore {
     public FileStore(Path file) throws IOException {
         this.file = file.toAbsolutePath().normalize();
         this.state = load();
-        if (!state.accountsByToken.containsKey("0")) {
-            state.accountsByToken.put("0", AccountRecord.developmentAccount());
-        }
         normalizeLoadedState();
         save();
     }
@@ -50,6 +47,31 @@ public final class FileStore {
         return state.accountsByToken.values().stream()
                 .filter(account -> account.username.equalsIgnoreCase(username))
                 .findFirst();
+    }
+
+    public synchronized LoaderLoginResult loginByUsername(String username) throws IOException {
+        String normalized = username == null ? "" : username.trim();
+        if (normalized.isEmpty() || normalized.length() > 16) {
+            throw new IllegalArgumentException("Username must contain 1 to 16 characters");
+        }
+        for (Map.Entry<String, AccountRecord> entry : state.accountsByToken.entrySet()) {
+            if (entry.getValue().username.equalsIgnoreCase(normalized)) {
+                return new LoaderLoginResult(entry.getKey(), entry.getValue());
+            }
+        }
+
+        String token;
+        do {
+            token = randomToken();
+        } while (state.accountsByToken.containsKey(token));
+        AccountRecord account = new AccountRecord();
+        account.userId = state.nextUserId++;
+        account.username = normalized;
+        account.accountCreation = AccountRecord.nowTimestamp();
+        account.registered = true;
+        state.accountsByToken.put(token, account);
+        save();
+        return new LoaderLoginResult(token, account);
     }
 
     public synchronized boolean areFriends(long firstUserId, long secondUserId) {
@@ -285,6 +307,9 @@ public final class FileStore {
     }
 
     public record PartyLeaveResult(boolean successful, PartyRecord party, long newLeaderId) {
+    }
+
+    public record LoaderLoginResult(String token, AccountRecord account) {
     }
 
     public synchronized AuthChallengeRecord createChallenge(String edition, String hwid) throws IOException {

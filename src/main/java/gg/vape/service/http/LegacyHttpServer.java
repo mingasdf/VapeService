@@ -61,6 +61,10 @@ public final class LegacyHttpServer implements AutoCloseable {
                 sendJson(exchange, 200, object("status", "UP", "time", Instant.now().toString()));
                 return;
             }
+            if ("/loader/login".equals(path)) {
+                handleLoaderLogin(exchange);
+                return;
+            }
             if ("/api/v1/app-auth/generate".equals(path)) {
                 handleGenerate(exchange);
                 return;
@@ -98,6 +102,18 @@ public final class LegacyHttpServer implements AutoCloseable {
         AuthChallengeRecord challenge = store.createChallenge(
                 form.getOrDefault("edition", "v4"), form.getOrDefault("hwid", "unknown"));
         sendText(exchange, 200, "text/plain; charset=utf-8", challenge.challenge);
+    }
+
+    private void handleLoaderLogin(HttpExchange exchange) throws IOException {
+        requireMethod(exchange, "POST");
+        JsonObject request = readJsonObject(exchange);
+        String username = request.has("username") ? request.get("username").getAsString() : "";
+        FileStore.LoaderLoginResult login = store.loginByUsername(username);
+        JsonObject response = new JsonObject();
+        response.addProperty("successful", true);
+        response.addProperty("token", login.token());
+        response.addProperty("username", login.account().username);
+        sendJson(exchange, 200, response);
     }
 
     private void handleProceed(HttpExchange exchange, String challenge) throws IOException {

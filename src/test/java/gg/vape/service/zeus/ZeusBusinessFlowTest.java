@@ -3,7 +3,6 @@ package gg.vape.service.zeus;
 import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 
-import gg.vape.service.store.AuthChallengeRecord;
 import gg.vape.service.store.FileStore;
 import io.netty.buffer.ByteBuf;
 import io.netty.buffer.Unpooled;
@@ -23,15 +22,13 @@ class ZeusBusinessFlowTest {
     @Test
     void routesFriendPartyPingAndActivityTrafficBetweenClients() throws Exception {
         FileStore store = new FileStore(temporaryDirectory.resolve("state.json"));
-        AuthChallengeRecord challenge = store.createChallenge("v4", "test");
-        assertTrue(store.approveChallenge(challenge.challenge));
-        String secondToken = store.challenge(challenge.challenge).orElseThrow().accessToken;
-        store.register(secondToken, "Alice");
+        String developerToken = store.loginByUsername("Developer").token();
+        String aliceToken = store.loginByUsername("Alice").token();
 
         try (ZeusServer server = new ZeusServer("127.0.0.1", 0, store)) {
             server.start();
-            try (WireClient developer = new WireClient(server.port(), "0", "DeveloperMc");
-                 WireClient alice = new WireClient(server.port(), secondToken, "AliceMc")) {
+            try (WireClient developer = new WireClient(server.port(), developerToken, "DeveloperMc");
+                 WireClient alice = new WireClient(server.port(), aliceToken, "AliceMc")) {
                 developer.initialize();
                 alice.initialize();
 

@@ -25,17 +25,24 @@ class LegacyHttpServerTest {
             server.start();
             HttpClient client = HttpClient.newHttpClient();
             URI base = URI.create("http://127.0.0.1:" + server.port());
+            HttpResponse<String> loginResponse = client.send(HttpRequest.newBuilder(
+                            base.resolve("/loader/login"))
+                    .header("Content-Type", "application/json")
+                    .POST(HttpRequest.BodyPublishers.ofString("{\"username\":\"Developer\"}"))
+                    .build(), HttpResponse.BodyHandlers.ofString());
+            JsonObject login = JsonParser.parseString(loginResponse.body()).getAsJsonObject();
+            String token = login.get("token").getAsString();
             HttpResponse<String> accountResponse = client.send(HttpRequest.newBuilder(
-                    base.resolve("/api/v1/0/authenticated")).GET().build(),
+                    base.resolve("/api/v1/" + token + "/authenticated")).GET().build(),
                     HttpResponse.BodyHandlers.ofString());
             JsonObject accountEnvelope = JsonParser.parseString(accountResponse.body()).getAsJsonObject();
             assertEquals(200, accountResponse.statusCode());
             assertTrue(accountEnvelope.get("successful").getAsBoolean());
-            assertEquals(1L, accountEnvelope.getAsJsonObject("data").get("userId").getAsLong());
+            assertEquals("Developer", accountEnvelope.getAsJsonObject("data").get("username").getAsString());
 
             String settings = "{\"cache\":true,\"firstRun\":false}";
             HttpResponse<String> saveResponse = client.send(HttpRequest.newBuilder(
-                            base.resolve("/api/v1/0/settings/save/global"))
+                            base.resolve("/api/v1/" + token + "/settings/save/global"))
                     .header("Content-Type", "application/json")
                     .POST(HttpRequest.BodyPublishers.ofString(settings)).build(),
                     HttpResponse.BodyHandlers.ofString());
@@ -43,6 +50,7 @@ class LegacyHttpServerTest {
         }
 
         FileStore reloaded = new FileStore(temporaryDirectory.resolve("state.json"));
-        assertTrue(reloaded.globalSettings("0").get("cache").getAsBoolean());
+        String token = reloaded.loginByUsername("developer").token();
+        assertTrue(reloaded.globalSettings(token).get("cache").getAsBoolean());
     }
 }

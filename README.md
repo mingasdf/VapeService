@@ -3,6 +3,10 @@
 单进程 Java 实验服务，提供旧版 Online REST API 和 Zeus TCP 核心链路。
 数据保存在本地 JSON 文件，不依赖数据库或 Redis。
 
+## 测试环境安全说明
+
+当前服务仅用于本地测试，登录接口没有密码认证，而是直接按用户名匹配账户；用户名不存在时会创建普通账户。请仅监听受信任的本机或测试网络地址，不要将 HTTP 或 Zeus 端口暴露到公网，也不要用于生产环境。
+
 ## Requirements
 
 - JDK 17
@@ -10,7 +14,8 @@
 ## Run
 
 ```powershell
-.\gradlew.bat run
+.\gradlew.bat build
+java -jar build\libs\vape421-experimental-service-0.1.0.jar
 ```
 
 默认监听：
@@ -19,14 +24,24 @@
 - Zeus: `127.0.0.1:8091`
 - 数据文件: `data/vape-service.json`
 
-可通过环境变量覆盖：
+可通过命令行参数覆盖：
+
+```powershell
+java -jar build\libs\vape421-experimental-service-0.1.0.jar `
+  --bind-address 127.0.0.1 `
+  --http-port 8080 `
+  --zeus-port 8091 `
+  --data-file data/vape-service.json
+```
+
+也可以继续使用环境变量；命令行参数的优先级更高：
 
 ```powershell
 $env:VAPE_BIND_ADDRESS='127.0.0.1'
 $env:VAPE_HTTP_PORT='8080'
 $env:VAPE_ZEUS_PORT='8091'
 $env:VAPE_DATA_FILE='data/vape-service.json'
-.\gradlew.bat run
+java -jar build\libs\vape421-experimental-service-0.1.0.jar
 ```
 
 客户端启动前设置：
@@ -66,3 +81,7 @@ Zeus 认证态客户端入站 ID `0-31` 均有处理分支。好友、请求和 
 ```powershell
 .\gradlew.bat test
 ```
+
+## 许可证
+
+本仓库采用 [CC0 1.0 Universal](LICENSE) 许可。

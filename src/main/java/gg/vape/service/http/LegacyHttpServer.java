@@ -12,6 +12,10 @@ import com.sun.net.httpserver.HttpServer;
 import gg.vape.service.store.AccountRecord;
 import gg.vape.service.store.AuthChallengeRecord;
 import gg.vape.service.store.FileStore;
+import gg.vape.service.store.PublicProfileRecord;
+import gg.vape.service.store.PublicProfileReportRecord;
+import gg.vape.service.store.PublicProfileReviewRecord;
+import gg.vape.service.store.PublicProfileReviewResponseRecord;
 import java.io.IOException;
 import java.net.InetSocketAddress;
 import java.net.URLDecoder;
@@ -216,6 +220,160 @@ public final class LegacyHttpServer implements AutoCloseable {
         } else if (operation.contains("/review/") || operation.contains("/reports/")
                 || "profile/public/regenerate/sharecode".equals(operation)) {
             sendEnvelope(exchange, true, gson.toJsonTree(true), null);
+        } else if ("profile/public/tags/popular".equals(operation)) {
+            requireMethod(exchange, "GET");
+            int limit = parseQueryParam(exchange, "limit", 20);
+            sendEnvelope(exchange, true, store.getPopularTags(limit), null);
+        } else if ("profile/public/list".equals(operation)) {
+            requireMethod(exchange, "POST");
+            JsonObject request = readJsonObject(exchange);
+            int page = request.has("page") ? request.get("page").getAsInt() : 0;
+            int size = request.has("size") ? request.get("size").getAsInt() : 20;
+            String sortBy = request.has("sortBy") ? request.get("sortBy").getAsString() : "updatedDate";
+            String searchQuery = request.has("search") ? request.get("search").getAsString() : null;
+            List<String> tags = new ArrayList<>();
+            if (request.has("tags")) {
+                JsonArray tagsArray = request.getAsJsonArray("tags");
+                for (JsonElement tag : tagsArray) {
+                    tags.add(tag.getAsString());
+                }
+            }
+            sendEnvelope(exchange, true, store.listPublicProfiles(account.userId, page, size, sortBy, searchQuery, tags.isEmpty() ? null : tags), null);
+        } else if ("profile/public/create".equals(operation)) {
+            requireMethod(exchange, "POST");
+            PublicProfileRecord created = store.createPublicProfile(token, readJsonObject(exchange));
+            sendEnvelope(exchange, true, created.toJson(), null);
+        } else if ("profile/public/edit".equals(operation)) {
+            requireMethod(exchange, "POST");
+            JsonObject request = readJsonObject(exchange);
+            if (!request.has("profileId")) {
+                throw new IllegalArgumentException("Missing profileId");
+            }
+            long profileId = request.get("profileId").getAsLong();
+            PublicProfileRecord updated = store.updatePublicProfile(token, profileId, request);
+            sendEnvelope(exchange, true, updated.toJson(), null);
+        } else if (operation.startsWith("profile/public/") && operation.endsWith("/delete")) {
+            requireMethod(exchange, "DELETE");
+            String id = operation.substring("profile/public/".length(), operation.length() - "/delete".length());
+            long profileId = Long.parseLong(id);
+            boolean deleted = store.deletePublicProfile(token, profileId);
+            sendEnvelope(exchange, true, gson.toJsonTree(deleted), null);
+        } else if (operation.startsWith("profile/public/") && operation.endsWith("/view")) {
+            requireMethod(exchange, "GET");
+            String id = operation.substring("profile/public/".length(), operation.length() - "/view".length());
+            long profileId = Long.parseLong(id);
+            JsonObject full = store.getProfileWithFullDetails(profileId, account.userId);
+            sendEnvelope(exchange, full != null, full != null ? full : JsonNull.INSTANCE, full != null ? null : "Profile not found");
+        } else if (operation.startsWith("profile/public/") && operation.endsWith("/download")) {
+            requireMethod(exchange, "GET");
+            String id = operation.substring("profile/public/".length(), operation.length() - "/download".length());
+            long profileId = Long.parseLong(id);
+            Optional<PublicProfileRecord> profile = store.getPublicProfile(profileId);
+            if (profile.isEmpty() || !profile.get().listedPublicly) {
+                sendEnvelope(exchange, false, JsonNull.INSTANCE, "Profile not found or not public");
+            } else {
+                store.incrementDownloads(profileId);
+                sendEnvelope(exchange, true, profile.get().toJson(), null);
+            }
+        } else if (operation.startsWith("profile/public/") && operation.endsWith("/sharecode/regenerate")) {
+            requireMethod(exchange, "POST");
+            String id = operation.substring("profile/public/".length(), operation.length() - "/sharecode/regenerate".length());
+            long profileId = Long.parseLong(id);
+            String newCode = store.regenerateShareCode(token, profileId);
+            JsonObject response = new JsonObject();
+            response.addProperty("shareCode", newCode);
+            sendEnvelope(exchange, true, response, null);
+        } else if (operation.startsWith("profile/public/sharecode/")) {
+            requireMethod(exchange, "GET");
+            String shareCode = operation.substring("profile/public/sharecode/".length());
+            Optional<PublicProfileRecord> profile = store.getPublicProfileByShareCode(shareCode);
+            if (profile.isEmpty() || !profile.get().listedPublicly) {
+                sendEnvelope(exchange, false, JsonNull.INSTANCE, "Profile not found");
+            } else {
+                JsonObject full = store.getProfileWithFullDetails(profile.get().profileId, account.userId);
+                sendEnvelope(exchange, true, full, null);
+            }
+        } else if (operation.startsWith("profile/public/") && operation.endsWith("/statistics")) {
+            requireMethod(exchange, "GET");
+            String id = operation.substring("profile/public/".length(), operation.length() - "/statistics".length());
+            long profileId = Long.parseLong(id);
+            sendEnvelope(exchange, true, store.getProfileStatistics(profileId), null);
+        } else if ("profile/public/review/create".equals(operation)) {
+            requireMethod(exchange, "POST");
+            JsonObject request = readJsonObject(exchange);
+            if (!request.has("profileId") || !request.has("message") || !request.has("liked")) {
+                throw new IllegalArgumentException("Missing required fields: profileId, message, liked");
+            }
+            long profileId = request.get("profileId").getAsLong();
+            String message = request.get("message").getAsString();
+            boolean liked = request.get("liked").getAsBoolean();
+            PublicProfileReviewRecord review = store.createReview(token, profileId, message, liked);
+            sendEnvelope(exchange, true, review.toJson(), null);
+        } else if ("profile/public/review/update".equals(operation)) {
+            requireMethod(exchange, "POST");
+            JsonObject request = readJsonObject(exchange);
+            if (!request.has("reviewId") || !request.has("message")) {
+                throw new IllegalArgumentException("Missing required fields: reviewId, message");
+            }
+            long reviewId = request.get("reviewId").getAsLong();
+            String message = request.get("message").getAsString();
+            PublicProfileReviewRecord updated = store.updateReview(token, reviewId, message);
+            sendEnvelope(exchange, true, updated.toJson(), null);
+        } else if (operation.startsWith("profile/public/review/") && operation.endsWith("/delete")) {
+            requireMethod(exchange, "DELETE");
+            String id = operation.substring("profile/public/review/".length(), operation.length() - "/delete".length());
+            long reviewId = Long.parseLong(id);
+            boolean deleted = store.deleteReview(token, reviewId);
+            sendEnvelope(exchange, true, gson.toJsonTree(deleted), null);
+        } else if (operation.startsWith("profile/public/review/") && operation.endsWith("/mark-read")) {
+            requireMethod(exchange, "POST");
+            String id = operation.substring("profile/public/review/".length(), operation.length() - "/mark-read".length());
+            long reviewId = Long.parseLong(id);
+            store.markReviewRead(reviewId);
+            sendEnvelope(exchange, true, gson.toJsonTree(true), null);
+        } else if ("profile/public/review/response/create".equals(operation)) {
+            requireMethod(exchange, "POST");
+            JsonObject request = readJsonObject(exchange);
+            if (!request.has("reviewId") || !request.has("response")) {
+                throw new IllegalArgumentException("Missing required fields: reviewId, response");
+            }
+            long reviewId = request.get("reviewId").getAsLong();
+            String response = request.get("response").getAsString();
+            PublicProfileReviewResponseRecord responseRecord = store.createReviewResponse(token, reviewId, response);
+            sendEnvelope(exchange, true, responseRecord.toJson(), null);
+        } else if (operation.startsWith("profile/public/review/response/")) {
+            requireMethod(exchange, "GET");
+            String id = operation.substring("profile/public/review/response/".length());
+            long responseId = Long.parseLong(id);
+            Optional<PublicProfileReviewResponseRecord> response = store.getReviewResponse(responseId);
+            sendEnvelope(exchange, response.isPresent(), response.<JsonElement>map(r -> r.toJson()).orElse(JsonNull.INSTANCE), response.isPresent() ? null : "Response not found");
+        } else if ("profile/public/report/create".equals(operation)) {
+            requireMethod(exchange, "POST");
+            JsonObject request = readJsonObject(exchange);
+            if (!request.has("profileId") || !request.has("reason")) {
+                throw new IllegalArgumentException("Missing required fields: profileId, reason");
+            }
+            long profileId = request.get("profileId").getAsLong();
+            String reason = request.get("reason").getAsString();
+            String details = request.has("details") ? request.get("details").getAsString() : "";
+            PublicProfileReportRecord report = store.createReport(token, profileId, reason, details);
+            sendEnvelope(exchange, true, report.toJson(), null);
+        } else if (operation.startsWith("profile/public/report/") && operation.endsWith("/resolve")) {
+            requireMethod(exchange, "POST");
+            String id = operation.substring("profile/public/report/".length(), operation.length() - "/resolve".length());
+            long reportId = Long.parseLong(id);
+            boolean resolved = store.resolveReport(token, reportId);
+            sendEnvelope(exchange, true, gson.toJsonTree(resolved), null);
+        } else if ("profile/public/notifications/unread/count".equals(operation)) {
+            requireMethod(exchange, "GET");
+            long count = store.getUnreadNotificationCount(account.userId);
+            JsonObject response = new JsonObject();
+            response.addProperty("unreadCount", count);
+            sendEnvelope(exchange, true, response, null);
+        } else if ("profile/public/notifications/clear".equals(operation)) {
+            requireMethod(exchange, "POST");
+            store.clearUnreadNotifications(account.userId);
+            sendEnvelope(exchange, true, gson.toJsonTree(true), null);
         } else {
             sendEnvelope(exchange, false, JsonNull.INSTANCE, "Unsupported operation: " + operation);
         }
@@ -320,5 +478,19 @@ public final class LegacyHttpServer implements AutoCloseable {
             result.addProperty(entries[index], entries[index + 1]);
         }
         return result;
+    }
+	
+	private int parseQueryParam(HttpExchange exchange, String paramName, int defaultValue) {
+        String query = exchange.getRequestURI().getQuery();
+        if (query == null) return defaultValue;
+        try {
+            for (String pair : query.split("&")) {
+                String[] parts = pair.split("=");
+                if (parts.length == 2 && parts[0].equals(paramName)) {
+                    return Integer.parseInt(parts[1]);
+                }
+            }
+        } catch (NumberFormatException ignored) {}
+        return defaultValue;
     }
 }

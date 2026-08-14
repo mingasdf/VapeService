@@ -62,7 +62,6 @@ public final class PublicProfileRecord {
         return json;
     }
 
-    // 为客户端API兼容的toJson格式
     public JsonObject toClientJson() {
         JsonObject json = new JsonObject();
         json.addProperty("profileId", profileId);
@@ -75,6 +74,8 @@ public final class PublicProfileRecord {
         json.add("tags", tagsArray);
         if (data != null) {
             json.add("data", data.deepCopy());
+        } else {
+            json.add("data", new JsonObject());
         }
         json.addProperty("shareCode", shareCode);
         json.addProperty("version", version);

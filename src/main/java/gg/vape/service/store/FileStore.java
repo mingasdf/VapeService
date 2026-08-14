@@ -933,6 +933,65 @@ public final class FileStore {
         }
         save();
     }
+	
+	public synchronized JsonObject getProfileStatistics(long profileId) {
+        PublicProfileRecord profile = state.profilesById.get(profileId);
+        if (profile == null) {
+            JsonObject empty = new JsonObject();
+            empty.addProperty("error", "Profile not found");
+            return empty;
+        }
+        
+        JsonObject stats = new JsonObject();
+        stats.addProperty("profileId", profileId);
+        stats.addProperty("likes", profile.likes);
+        stats.addProperty("dislikes", profile.dislikes);
+        stats.addProperty("downloads", profile.downloads);
+        stats.addProperty("version", profile.version);
+        stats.addProperty("creationDate", profile.creationDate);
+        stats.addProperty("updatedDate", profile.updatedDate);
+        stats.addProperty("listedPublicly", profile.listedPublicly);
+        stats.addProperty("shareCodeFriendsOnly", profile.shareCodeFriendsOnly);
+        stats.addProperty("uploadAnonymously", profile.uploadAnonymously);
+        stats.addProperty("unreadNotifications", profile.unreadNotifications);
+        
+        long reviewCount = state.reviewsById.values().stream()
+            .filter(r -> r.profileId == profileId)
+            .count();
+        stats.addProperty("reviewCount", reviewCount);
+        
+        long likeCount = state.reviewsById.values().stream()
+            .filter(r -> r.profileId == profileId && r.liked)
+            .count();
+        stats.addProperty("likeCount", likeCount);
+        
+        long dislikeCount = state.reviewsById.values().stream()
+            .filter(r -> r.profileId == profileId && !r.liked)
+            .count();
+        stats.addProperty("dislikeCount", dislikeCount);
+        
+        long reportCount = state.reportsById.values().stream()
+            .filter(r -> r.profileId == profileId && !r.resolved)
+            .count();
+        stats.addProperty("openReportCount", reportCount);
+        
+        // 获取拥有者信息
+        account(profile.userId).ifPresent(acc -> {
+            JsonObject owner = new JsonObject();
+            owner.addProperty("userId", acc.userId);
+            owner.addProperty("username", acc.username);
+            stats.add("owner", owner);
+        });
+        
+        // 添加标签
+        JsonArray tagsArray = new JsonArray();
+        for (String tag : profile.tags) {
+            tagsArray.add(tag);
+        }
+        stats.add("tags", tagsArray);
+        
+        return stats;
+    }
 
     // ==================== 评价回复功能（完整版） ====================
 
@@ -1414,5 +1473,5 @@ public final class FileStore {
     public record PartyInviteResult(int status, PartyRecord party) {}
     public record PartyInviteDecision(int status, PartyRecord party) {}
     public record PartyLeaveResult(boolean successful, PartyRecord party, long newLeaderId) {}
-    public record LoaderLoginResult(String token, AccountRecord account) {}
+    public record LoaderLoginResult(String token, AccountRecord account) {}	
 }

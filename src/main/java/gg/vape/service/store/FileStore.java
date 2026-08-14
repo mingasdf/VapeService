@@ -546,12 +546,12 @@ public final class FileStore {
         if (request.has("derivedFrom")) {
             JsonElement derivedElement = request.get("derivedFrom");
             if (!derivedElement.isJsonNull()) {
-                try {
-                    String derivedStr = derivedElement.getAsString();
-                    if (derivedStr != null && !derivedStr.isEmpty()) {
+                String derivedStr = derivedElement.getAsString();
+                if (derivedStr != null && !derivedStr.isEmpty()) {
+                    try {
                         record.derivedFrom = Long.parseLong(derivedStr);
-                    }
-                } catch (NumberFormatException ignored) {}
+                    } catch (NumberFormatException ignored) {}
+                }
             }
         }
         
@@ -629,12 +629,12 @@ public final class FileStore {
             if (derivedElement.isJsonNull()) {
                 existing.derivedFrom = null;
             } else {
-                try {
-                    String derivedStr = derivedElement.getAsString();
-                    if (derivedStr != null && !derivedStr.isEmpty()) {
+                String derivedStr = derivedElement.getAsString();
+                if (derivedStr != null && !derivedStr.isEmpty()) {
+                    try {
                         existing.derivedFrom = Long.parseLong(derivedStr);
-                    }
-                } catch (NumberFormatException ignored) {}
+                    } catch (NumberFormatException ignored) {}
+                }
             }
         }
         
@@ -696,7 +696,7 @@ public final class FileStore {
         return record;
     }
 
-    // ==================== 列表和摘要（修复版） ====================
+    // ==================== 列表（修复版 - 匹配 PublicProfileSummary） ====================
 
     public synchronized JsonObject listPublicProfiles(long userId, int page, int size, String sortBy, String searchQuery, List<String> tags) {
         java.util.stream.Stream<PublicProfileRecord> stream = state.profilesById.values().stream()
@@ -756,19 +756,16 @@ public final class FileStore {
             summary.addProperty("likes", record.likes);
             summary.addProperty("dislikes", record.dislikes);
             
-            // 添加 tags
             JsonArray tagsArray = new JsonArray();
             for (String tag : record.tags) {
                 tagsArray.add(tag);
             }
             summary.add("tags", tagsArray);
             
-            // 添加 shareCode（用于客户端显示）
             if (record.shareCode != null) {
                 summary.addProperty("shareCode", record.shareCode);
             }
             
-            // 添加 owner
             account(record.userId).ifPresent(acc -> {
                 if (!record.uploadAnonymously) {
                     JsonObject owner = new JsonObject();
@@ -778,20 +775,12 @@ public final class FileStore {
                 }
             });
             
-            // 检查当前用户是否已评价
-            if (userId > 0) {
-                boolean hasReviewed = state.reviewsById.values().stream()
-                    .anyMatch(r -> r.profileId == record.profileId && r.userId == userId);
-                summary.addProperty("hasReviewed", hasReviewed);
-            }
-            
-            content.add(summary);
+            result.add("content", content);
         }
         
-        result.add("content", content);
         result.addProperty("last", end >= total);
         result.addProperty("totalPages", (int)Math.ceil((double)total / size));
-        result.addProperty("totalElements", total);
+        result.addProperty("totalElements", (long)total);
         result.addProperty("size", size);
         result.addProperty("numberOfElements", paged.size());
         return result;
@@ -997,7 +986,6 @@ public final class FileStore {
             .count();
         stats.addProperty("openReportCount", reportCount);
         
-        // 获取拥有者信息
         account(profile.userId).ifPresent(acc -> {
             JsonObject owner = new JsonObject();
             owner.addProperty("userId", acc.userId);
@@ -1005,7 +993,6 @@ public final class FileStore {
             stats.add("owner", owner);
         });
         
-        // 添加标签
         JsonArray tagsArray = new JsonArray();
         for (String tag : profile.tags) {
             tagsArray.add(tag);
@@ -1202,7 +1189,7 @@ public final class FileStore {
         return API_DATE_FORMAT.format(new Date(timestamp));
     }
 
-    // ==================== 响应构建方法 ====================
+    // ==================== 响应构建方法（修复版） ====================
 
     public synchronized JsonObject buildPublicProfileResponse(PublicProfileRecord record, AccountRecord viewer) {
         JsonObject json = new JsonObject();
@@ -1216,9 +1203,6 @@ public final class FileStore {
         json.addProperty("downloads", record.downloads);
         json.addProperty("creationDate", formatDate(record.creationDate));
         json.addProperty("updatedDate", formatDate(record.updatedDate));
-        json.addProperty("listedPublicly", record.listedPublicly);
-        json.addProperty("shareCodeFriendsOnly", record.shareCodeFriendsOnly);
-        json.addProperty("uploadAnonymously", record.uploadAnonymously);
         
         // Tags
         JsonArray tagsArray = new JsonArray();
@@ -1234,7 +1218,7 @@ public final class FileStore {
             json.add("data", new JsonObject());
         }
         
-        // Owner
+        // Owner - PublicProfileUser format
         if (!record.uploadAnonymously) {
             account(record.userId).ifPresent(acc -> {
                 JsonObject owner = new JsonObject();
@@ -1244,7 +1228,7 @@ public final class FileStore {
             });
         }
         
-        // ShareInfo
+        // ShareInfo - PublicProfileShareInfo format
         JsonObject shareInfo = new JsonObject();
         shareInfo.addProperty("shareCode", record.shareCode);
         shareInfo.addProperty("listedPublicly", record.listedPublicly);
@@ -1256,14 +1240,14 @@ public final class FileStore {
         shareInfo.addProperty("unreadNotifications", record.unreadNotifications);
         json.add("shareInfo", shareInfo);
         
-        // Viewer Review
+        // Viewer Review - PublicProfileReview format
         if (viewer != null) {
             getReviewByUserAndProfile(viewer.userId, record.profileId).ifPresent(review -> {
                 json.add("viewerReview", buildReviewResponse(review));
             });
         }
         
-        // Reviews (PagedResult format)
+        // Reviews - PagedResult format
         List<PublicProfileReviewRecord> reviews = getReviewsForProfile(record.profileId);
         JsonObject reviewsObj = new JsonObject();
         JsonArray reviewsArray = new JsonArray();
@@ -1380,6 +1364,8 @@ public final class FileStore {
         result.addProperty("numberOfElements", content.size());
         return result;
     }
+
+    // ==================== 支持方法 ====================
 
     private AccountRecord requireAccount(String token) {
         AccountRecord account = state.accountsByToken.get(token);

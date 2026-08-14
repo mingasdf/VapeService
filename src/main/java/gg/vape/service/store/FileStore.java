@@ -1276,7 +1276,6 @@ public final class FileStore {
             }
         }
         
-        // 确保所有 token 的账户都有正确的字段
         for (AccountRecord account : state.accountsByToken.values()) {
             if (account.globalSettings == null) {
                 account.globalSettings = AccountRecord.defaultGlobalSettings();
@@ -1310,6 +1309,136 @@ public final class FileStore {
     public record LoaderLoginResult(String token, AccountRecord account) {}
 	
 	public synchronized List<PublicProfileRecord> getAllPublicProfiles() {
+        return new ArrayList<>(state.profilesById.values());
+    }
+	
+	public synchronized JsonObject buildPublicProfileResponse(PublicProfileRecord record, AccountRecord viewer) {
+        JsonObject json = new JsonObject();
+        json.addProperty("profileId", record.profileId);
+        json.addProperty("name", record.name);
+        json.addProperty("description", record.description != null ? record.description : "");
+        
+        JsonArray tagsArray = new JsonArray();
+        for (String tag : record.tags) {
+            tagsArray.add(tag);
+        }
+        json.add("tags", tagsArray);
+        
+        if (record.data != null) {
+            json.add("data", record.data.deepCopy());
+        }
+        
+        json.addProperty("shareCode", record.shareCode);
+        json.addProperty("version", record.version);
+        json.addProperty("likes", record.likes);
+        json.addProperty("dislikes", record.dislikes);
+        json.addProperty("downloads", record.downloads);
+        json.addProperty("creationDate", record.creationDate);
+        json.addProperty("updatedDate", record.updatedDate);
+        
+        if (!record.uploadAnonymously && viewer != null) {
+            JsonObject owner = new JsonObject();
+            owner.addProperty("userId", record.userId);
+            account(record.userId).ifPresent(acc -> {
+                owner.addProperty("username", acc.username);
+            });
+            json.add("owner", owner);
+        }
+        
+        JsonObject shareInfo = new JsonObject();
+        shareInfo.addProperty("shareCode", record.shareCode);
+        shareInfo.addProperty("listedPublicly", record.listedPublicly);
+        shareInfo.addProperty("shareCodeFriendsOnly", record.shareCodeFriendsOnly);
+        shareInfo.addProperty("uploadAnonymously", record.uploadAnonymously);
+        if (record.derivedFrom != null) {
+            shareInfo.addProperty("derivedFrom", record.derivedFrom);
+        }
+        shareInfo.addProperty("unreadNotifications", record.unreadNotifications);
+        json.add("shareInfo", shareInfo);
+        
+        if (viewer != null) {
+            getReviewByUserAndProfile(viewer.userId, record.profileId).ifPresent(review -> {
+                json.add("viewerReview", buildReviewResponse(review));
+            });
+        }
+        
+        JsonArray reviewsArray = new JsonArray();
+        for (PublicProfileReviewRecord review : getReviewsForProfile(record.profileId)) {
+            reviewsArray.add(buildReviewResponse(review));
+        }
+        json.add("reviews", reviewsArray);
+        
+        return json;
+    }
+
+    public synchronized JsonObject buildFullProfileResponse(long profileId, AccountRecord viewer) {
+        PublicProfileRecord record = state.profilesById.get(profileId);
+        if (record == null || !record.listedPublicly) {
+            return null;
+        }
+        return buildPublicProfileResponse(record, viewer);
+    }
+
+    public synchronized JsonObject buildRemoteProfileDataResponse(PublicProfileRecord record) {
+        JsonObject json = new JsonObject();
+        json.addProperty("name", record.name);
+        json.addProperty("vapeVersion", "4.21");
+        json.addProperty("profileId", record.profileId);
+        json.addProperty("version", record.version);
+        json.addProperty("updatedDate", record.updatedDate);
+        if (record.data != null) {
+            json.add("data", record.data.deepCopy());
+        }
+        return json;
+    }
+
+    public synchronized JsonObject buildRemoteProfileDataResponse(long profileId) {
+        PublicProfileRecord record = state.profilesById.get(profileId);
+        if (record == null || !record.listedPublicly) {
+            return null;
+        }
+        return buildRemoteProfileDataResponse(record);
+    }
+
+    public synchronized JsonObject buildReviewResponse(PublicProfileReviewRecord review) {
+        JsonObject json = new JsonObject();
+        json.addProperty("commentId", review.reviewId);
+        json.addProperty("profileId", review.profileId);
+        json.addProperty("userId", review.userId);
+        json.addProperty("message", review.message);
+        json.addProperty("liked", review.liked);
+        json.addProperty("createdDate", review.createdDate);
+        json.addProperty("updatedDate", review.updatedDate);
+        json.addProperty("version", review.version);
+        json.addProperty("latest", review.latest);
+        json.addProperty("read", review.read);
+        if (review.responseId != null) {
+            json.addProperty("responseId", review.responseId);
+            getReviewResponse(review.responseId).ifPresent(response -> {
+                json.add("response", buildReviewResponseResponse(response));
+            });
+        }
+        account(review.userId).ifPresent(acc -> {
+            JsonObject commenter = new JsonObject();
+            commenter.addProperty("userId", acc.userId);
+            commenter.addProperty("username", acc.username);
+            json.add("commenter", commenter);
+        });
+        return json;
+    }
+
+    public synchronized JsonObject buildReviewResponseResponse(PublicProfileReviewResponseRecord response) {
+        JsonObject json = new JsonObject();
+        json.addProperty("id", response.id);
+        json.addProperty("reviewId", response.reviewId);
+        json.addProperty("userId", response.userId);
+        json.addProperty("response", response.response);
+        json.addProperty("createdDate", response.createdDate);
+        json.addProperty("updatedDate", response.updatedDate);
+        return json;
+    }
+
+    public synchronized List<PublicProfileRecord> getAllPublicProfiles() {
         return new ArrayList<>(state.profilesById.values());
     }
 }

@@ -15,21 +15,27 @@ import java.nio.file.Files;
 import java.nio.file.Path;
 import java.nio.file.StandardCopyOption;
 import java.security.SecureRandom;
+import java.text.SimpleDateFormat;
 import java.util.ArrayList;
-import java.util.Collections;
 import java.util.Comparator;
+import java.util.Date;
 import java.util.HexFormat;
 import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Map;
 import java.util.Optional;
 import java.util.Set;
+import java.util.TimeZone;
 import java.util.UUID;
 import java.util.stream.Collectors;
-import java.util.stream.Stream;
 
 public final class FileStore {
     private static final long CHALLENGE_TTL_MILLIS = 5 * 60 * 1000L;
+    private static final SimpleDateFormat API_DATE_FORMAT = new SimpleDateFormat("yyyy-MM-dd'T'HH:mm:ss.SSSXXX");
+    static {
+        API_DATE_FORMAT.setTimeZone(TimeZone.getTimeZone("UTC"));
+    }
+    
     private final Gson gson = new GsonBuilder().setPrettyPrinting().serializeNulls().create();
     private final SecureRandom random = new SecureRandom();
     private final Path file;
@@ -43,6 +49,7 @@ public final class FileStore {
     }
 
     public synchronized Optional<AccountRecord> account(String token) {
+        if (token == null) return Optional.empty();
         return Optional.ofNullable(state.accountsByToken.get(token));
     }
 
@@ -53,6 +60,7 @@ public final class FileStore {
     }
 
     public synchronized Optional<AccountRecord> accountByName(String username) {
+        if (username == null) return Optional.empty();
         return state.accountsByToken.values().stream()
                 .filter(account -> account.username.equalsIgnoreCase(username))
                 .findFirst();
@@ -91,8 +99,7 @@ public final class FileStore {
         return account(userId).map(account -> Set.copyOf(account.onlineFriends)).orElse(Set.of());
     }
 
-    public synchronized FriendRequestCreation createFriendRequest(long senderId, String targetName)
-            throws IOException {
+    public synchronized FriendRequestCreation createFriendRequest(long senderId, String targetName) throws IOException {
         AccountRecord sender = account(senderId).orElseThrow();
         AccountRecord target = accountByName(targetName).orElse(null);
         if (target == null) {
@@ -119,8 +126,7 @@ public final class FileStore {
         return new FriendRequestCreation(0, request, target);
     }
 
-    public synchronized FriendRequestUpdate updateFriendRequest(long actorId, long requestId, boolean accepted)
-            throws IOException {
+    public synchronized FriendRequestUpdate updateFriendRequest(long actorId, long requestId, boolean accepted) throws IOException {
         FriendRequestRecord request = state.friendRequests.get(requestId);
         if (request == null || request.receiverId != actorId) {
             return new FriendRequestUpdate(2, null, null);
@@ -149,14 +155,14 @@ public final class FileStore {
         return removed;
     }
 
-    public synchronized java.util.List<FriendRequestRecord> incomingRequests(long userId) {
+    public synchronized List<FriendRequestRecord> incomingRequests(long userId) {
         return state.friendRequests.values().stream()
-                .filter(request -> request.receiverId == userId).toList();
+                .filter(request -> request.receiverId == userId).collect(Collectors.toList());
     }
 
-    public synchronized java.util.List<FriendRequestRecord> outgoingRequests(long userId) {
+    public synchronized List<FriendRequestRecord> outgoingRequests(long userId) {
         return state.friendRequests.values().stream()
-                .filter(request -> request.senderId == userId).toList();
+                .filter(request -> request.senderId == userId).collect(Collectors.toList());
     }
 
     public synchronized PartyRecord createParty(long leaderId) throws IOException {
@@ -195,8 +201,7 @@ public final class FileStore {
         return new PartyInviteResult(0, party);
     }
 
-    public synchronized PartyInviteDecision decidePartyInvite(long actorId, long inviterId, boolean accepted)
-            throws IOException {
+    public synchronized PartyInviteDecision decidePartyInvite(long actorId, long inviterId, boolean accepted) throws IOException {
         PartyRecord party = partyFor(inviterId).orElse(null);
         if (party == null || !party.invitedUsers.remove(actorId)) {
             return new PartyInviteDecision(3, null);
@@ -484,7 +489,7 @@ public final class FileStore {
         return true;
     }
 
-    // ==================== 公共配置核心功能 ====================
+    // ==================== 公共配置核心功能（完整版） ====================
 
     public synchronized PublicProfileRecord createPublicProfile(String token, JsonObject request) throws IOException {
         AccountRecord account = requireAccount(token);
@@ -511,7 +516,6 @@ public final class FileStore {
             }
         }
         
-        // 处理 profileData 或 data 字段
         if (request.has("profileData")) {
             JsonElement dataElement = request.get("profileData");
             if (dataElement.isJsonObject()) {
@@ -522,6 +526,10 @@ public final class FileStore {
             if (dataElement.isJsonObject()) {
                 record.data = dataElement.getAsJsonObject().deepCopy();
             }
+        }
+        
+        if (record.data == null) {
+            record.data = new JsonObject();
         }
         
         record.shareCode = generateShareCode();
@@ -536,10 +544,13 @@ public final class FileStore {
         }
         
         if (request.has("derivedFrom")) {
-            String derivedFromStr = request.get("derivedFrom").getAsString();
-            if (derivedFromStr != null && !derivedFromStr.isEmpty()) {
+            JsonElement derivedElement = request.get("derivedFrom");
+            if (!derivedElement.isJsonNull()) {
                 try {
-                    record.derivedFrom = Long.parseLong(derivedFromStr);
+                    String derivedStr = derivedElement.getAsString();
+                    if (derivedStr != null && !derivedStr.isEmpty()) {
+                        record.derivedFrom = Long.parseLong(derivedStr);
+                    }
                 } catch (NumberFormatException ignored) {}
             }
         }
@@ -564,7 +575,8 @@ public final class FileStore {
         }
         
         if (request.has("description")) {
-            existing.description = request.get("description").getAsString();
+            String desc = request.get("description").getAsString();
+            existing.description = desc != null ? desc : "";
         }
         
         if (request.has("tags")) {
@@ -573,17 +585,24 @@ public final class FileStore {
             }
             existing.tags.clear();
             JsonArray tagsArray = request.getAsJsonArray("tags");
-            for (JsonElement tag : tagsArray) {
-                String normalized = tag.getAsString().trim().toLowerCase();
-                if (!normalized.isEmpty() && normalized.length() <= 16) {
-                    existing.tags.add(normalized);
-                    updateTagUsage(normalized, 1);
+            if (tagsArray != null) {
+                for (JsonElement tag : tagsArray) {
+                    String normalized = tag.getAsString().trim().toLowerCase();
+                    if (!normalized.isEmpty() && normalized.length() <= 16) {
+                        existing.tags.add(normalized);
+                        updateTagUsage(normalized, 1);
+                    }
                 }
             }
         }
         
-        if (request.has("profileData") || request.has("data")) {
-            JsonElement dataElement = request.has("profileData") ? request.get("profileData") : request.get("data");
+        if (request.has("profileData")) {
+            JsonElement dataElement = request.get("profileData");
+            if (dataElement.isJsonObject()) {
+                existing.data = dataElement.getAsJsonObject().deepCopy();
+            }
+        } else if (request.has("data")) {
+            JsonElement dataElement = request.get("data");
             if (dataElement.isJsonObject()) {
                 existing.data = dataElement.getAsJsonObject().deepCopy();
             }
@@ -605,6 +624,20 @@ public final class FileStore {
             existing.uploadAnonymously = request.get("uploadAnonymously").getAsBoolean();
         }
         
+        if (request.has("derivedFrom")) {
+            JsonElement derivedElement = request.get("derivedFrom");
+            if (derivedElement.isJsonNull()) {
+                existing.derivedFrom = null;
+            } else {
+                try {
+                    String derivedStr = derivedElement.getAsString();
+                    if (derivedStr != null && !derivedStr.isEmpty()) {
+                        existing.derivedFrom = Long.parseLong(derivedStr);
+                    }
+                } catch (NumberFormatException ignored) {}
+            }
+        }
+        
         existing.version++;
         existing.updatedDate = System.currentTimeMillis();
         save();
@@ -616,6 +649,7 @@ public final class FileStore {
     }
 
     public synchronized Optional<PublicProfileRecord> getPublicProfileByShareCode(String shareCode) {
+        if (shareCode == null) return Optional.empty();
         Long profileId = state.profilesByShareCode.get(shareCode.toUpperCase());
         if (profileId != null) {
             return Optional.ofNullable(state.profilesById.get(profileId));
@@ -663,7 +697,7 @@ public final class FileStore {
     }
 
     public synchronized JsonObject listPublicProfiles(long userId, int page, int size, String sortBy, String searchQuery, List<String> tags) {
-        Stream<PublicProfileRecord> stream = state.profilesById.values().stream()
+        java.util.stream.Stream<PublicProfileRecord> stream = state.profilesById.values().stream()
             .filter(p -> p.listedPublicly);
         
         if (searchQuery != null && !searchQuery.isEmpty()) {
@@ -715,7 +749,10 @@ public final class FileStore {
             JsonObject summary = record.toJson();
             account(record.userId).ifPresent(acc -> {
                 if (!record.uploadAnonymously) {
-                    summary.add("owner", acc.accountJson());
+                    JsonObject owner = new JsonObject();
+                    owner.addProperty("userId", acc.userId);
+                    owner.addProperty("username", acc.username);
+                    summary.add("owner", owner);
                 }
             });
             long currentUserId = userId;
@@ -736,7 +773,7 @@ public final class FileStore {
         return result;
     }
 
-    // ==================== 评价功能 ====================
+    // ==================== 评价功能（完整版） ====================
 
     public synchronized PublicProfileReviewRecord createReview(String token, long profileId, String message, boolean liked) throws IOException {
         AccountRecord account = requireAccount(token);
@@ -745,10 +782,35 @@ public final class FileStore {
             throw new IllegalArgumentException("Profile not found");
         }
         
-        for (PublicProfileReviewRecord existing : state.reviewsById.values()) {
-            if (existing.profileId == profileId && existing.userId == account.userId) {
-                throw new IllegalArgumentException("Already reviewed this profile");
+        Optional<PublicProfileReviewRecord> existingReview = getReviewByUserAndProfile(account.userId, profileId);
+        if (existingReview.isPresent()) {
+            // 如果已存在评价，更新它而不是创建新的
+            PublicProfileReviewRecord existing = existingReview.get();
+            // 如果评价内容或点赞状态变化，更新
+            if (!existing.message.equals(message) || existing.liked != liked) {
+                // 先撤销原评价的计数
+                if (existing.liked) {
+                    profile.likes = Math.max(0, profile.likes - 1);
+                } else {
+                    profile.dislikes = Math.max(0, profile.dislikes - 1);
+                }
+                // 更新评价
+                existing.message = message;
+                existing.liked = liked;
+                existing.version++;
+                existing.updatedDate = System.currentTimeMillis();
+                existing.latest = true;
+                // 应用新计数
+                if (liked) {
+                    profile.likes++;
+                } else {
+                    profile.dislikes++;
+                }
+                profile.updatedDate = System.currentTimeMillis();
+                save();
+                return existing;
             }
+            return existing;
         }
         
         for (PublicProfileReviewRecord existing : state.reviewsById.values()) {
@@ -845,7 +907,7 @@ public final class FileStore {
 
     public synchronized void markReviewRead(long reviewId) throws IOException {
         PublicProfileReviewRecord review = state.reviewsById.get(reviewId);
-        if (review != null) {
+        if (review != null && !review.read) {
             review.read = true;
             save();
         }
@@ -853,24 +915,26 @@ public final class FileStore {
 
     public synchronized long getUnreadNotificationCount(long userId) {
         long count = 0;
-        for (PublicProfileRecord profile : state.profilesById.values()) {
-            if (profile.userId == userId) {
-                count += profile.unreadNotifications;
+        for (PublicProfileReviewRecord review : state.reviewsById.values()) {
+            PublicProfileRecord profile = state.profilesById.get(review.profileId);
+            if (profile != null && profile.userId == userId && !review.read) {
+                count++;
             }
         }
         return count;
     }
 
     public synchronized void clearUnreadNotifications(long userId) throws IOException {
-        for (PublicProfileRecord profile : state.profilesById.values()) {
-            if (profile.userId == userId) {
-                profile.unreadNotifications = 0L;
+        for (PublicProfileReviewRecord review : state.reviewsById.values()) {
+            PublicProfileRecord profile = state.profilesById.get(review.profileId);
+            if (profile != null && profile.userId == userId) {
+                review.read = true;
             }
         }
         save();
     }
 
-    // ==================== 评价回复功能 ====================
+    // ==================== 评价回复功能（完整版） ====================
 
     public synchronized PublicProfileReviewResponseRecord createReviewResponse(String token, long reviewId, String response) throws IOException {
         AccountRecord account = requireAccount(token);
@@ -882,6 +946,17 @@ public final class FileStore {
         PublicProfileRecord profile = state.profilesById.get(review.profileId);
         if (profile == null || profile.userId != account.userId) {
             throw new IllegalArgumentException("Not authorized to respond to this review");
+        }
+        
+        // 如果已有回复，更新它
+        if (review.responseId != null) {
+            PublicProfileReviewResponseRecord existing = state.reviewResponsesById.get(review.responseId);
+            if (existing != null) {
+                existing.response = response;
+                existing.updatedDate = System.currentTimeMillis();
+                save();
+                return existing;
+            }
         }
         
         PublicProfileReviewResponseRecord responseRecord = new PublicProfileReviewResponseRecord();
@@ -922,7 +997,7 @@ public final class FileStore {
         return true;
     }
 
-    // ==================== 举报功能 ====================
+    // ==================== 举报功能（完整版） ====================
 
     public synchronized PublicProfileReportRecord createReport(String token, long profileId, String reason, String details) throws IOException {
         AccountRecord account = requireAccount(token);
@@ -968,7 +1043,7 @@ public final class FileStore {
         return true;
     }
 
-    // ==================== 标签功能 ====================
+    // ==================== 标签功能（完整版） ====================
 
     public synchronized JsonObject getPopularTags(int limit) {
         JsonArray tagsArray = new JsonArray();
@@ -1001,7 +1076,7 @@ public final class FileStore {
         }
     }
 
-    // ==================== 分享码功能 ====================
+    // ==================== 分享码功能（完整版） ====================
 
     public synchronized String regenerateShareCode(String token, long profileId) throws IOException {
         AccountRecord account = requireAccount(token);
@@ -1038,98 +1113,160 @@ public final class FileStore {
         return newCode;
     }
 
-    // ==================== 统计功能 ====================
+    // ==================== 响应构建方法（关键修复） ====================
 
-    public synchronized JsonObject getProfileStatistics(long profileId) {
-        PublicProfileRecord profile = state.profilesById.get(profileId);
-        if (profile == null) {
-            return new JsonObject();
-        }
-        
-        JsonObject stats = new JsonObject();
-        stats.addProperty("profileId", profileId);
-        stats.addProperty("likes", profile.likes);
-        stats.addProperty("dislikes", profile.dislikes);
-        stats.addProperty("downloads", profile.downloads);
-        
-        long reviewCount = state.reviewsById.values().stream()
-            .filter(r -> r.profileId == profileId)
-            .count();
-        stats.addProperty("reviewCount", reviewCount);
-        
-        long reportCount = state.reportsById.values().stream()
-            .filter(r -> r.profileId == profileId && !r.resolved)
-            .count();
-        stats.addProperty("openReportCount", reportCount);
-        
-        return stats;
+    private String formatDate(long timestamp) {
+        return API_DATE_FORMAT.format(new Date(timestamp));
     }
 
-    public synchronized JsonObject getProfileWithFullDetails(long profileId, long viewerUserId) {
-        PublicProfileRecord profile = state.profilesById.get(profileId);
-        if (profile == null || !profile.listedPublicly) {
-            return null;
+    public synchronized JsonObject buildPublicProfileResponse(PublicProfileRecord record, AccountRecord viewer) {
+        JsonObject json = new JsonObject();
+        json.addProperty("profileId", record.profileId);
+        json.addProperty("name", record.name);
+        json.addProperty("description", record.description != null ? record.description : "");
+        
+        JsonArray tagsArray = new JsonArray();
+        for (String tag : record.tags) {
+            tagsArray.add(tag);
+        }
+        json.add("tags", tagsArray);
+        
+        if (record.data != null) {
+            json.add("data", record.data.deepCopy());
+        } else {
+            json.add("data", new JsonObject());
         }
         
-        JsonObject full = profile.toJson();
+        json.addProperty("shareCode", record.shareCode);
+        json.addProperty("version", record.version);
+        json.addProperty("likes", record.likes);
+        json.addProperty("dislikes", record.dislikes);
+        json.addProperty("downloads", record.downloads);
+        json.addProperty("creationDate", formatDate(record.creationDate));
+        json.addProperty("updatedDate", formatDate(record.updatedDate));
+        json.addProperty("listedPublicly", record.listedPublicly);
+        json.addProperty("shareCodeFriendsOnly", record.shareCodeFriendsOnly);
+        json.addProperty("uploadAnonymously", record.uploadAnonymously);
         
-        account(profile.userId).ifPresent(acc -> {
-            if (!profile.uploadAnonymously) {
-                full.add("owner", acc.accountJson());
-            }
-        });
-        
-        JsonArray reviewsArray = new JsonArray();
-        for (PublicProfileReviewRecord review : getReviewsForProfile(profileId)) {
-            JsonObject reviewJson = review.toJson();
-            account(review.userId).ifPresent(acc -> {
-                reviewJson.add("commenter", acc.accountJson());
+        // 添加 owner
+        if (!record.uploadAnonymously) {
+            account(record.userId).ifPresent(acc -> {
+                JsonObject owner = new JsonObject();
+                owner.addProperty("userId", acc.userId);
+                owner.addProperty("username", acc.username);
+                json.add("owner", owner);
             });
-            if (review.responseId != null) {
-                getReviewResponse(review.responseId).ifPresent(response -> {
-                    reviewJson.add("response", response.toJson());
-                });
-            }
-            reviewsArray.add(reviewJson);
         }
-        full.add("reviews", reviewsArray);
         
-        getReviewByUserAndProfile(viewerUserId, profileId).ifPresent(review -> {
-            full.add("viewerReview", review.toJson());
-        });
-        
+        // 添加 shareInfo
         JsonObject shareInfo = new JsonObject();
-        shareInfo.addProperty("shareCode", profile.shareCode);
-        shareInfo.addProperty("listedPublicly", profile.listedPublicly);
-        shareInfo.addProperty("shareCodeFriendsOnly", profile.shareCodeFriendsOnly);
-        shareInfo.addProperty("uploadAnonymously", profile.uploadAnonymously);
-        if (profile.derivedFrom != null) {
-            shareInfo.addProperty("derivedFrom", profile.derivedFrom);
+        shareInfo.addProperty("shareCode", record.shareCode);
+        shareInfo.addProperty("listedPublicly", record.listedPublicly);
+        shareInfo.addProperty("shareCodeFriendsOnly", record.shareCodeFriendsOnly);
+        shareInfo.addProperty("uploadAnonymously", record.uploadAnonymously);
+        if (record.derivedFrom != null) {
+            shareInfo.addProperty("derivedFrom", String.valueOf(record.derivedFrom));
         }
-        full.add("shareInfo", shareInfo);
+        shareInfo.addProperty("unreadNotifications", record.unreadNotifications);
+        json.add("shareInfo", shareInfo);
         
-        return full;
+        // 添加 viewerReview
+        if (viewer != null) {
+            getReviewByUserAndProfile(viewer.userId, record.profileId).ifPresent(review -> {
+                json.add("viewerReview", buildReviewResponse(review));
+            });
+        }
+        
+        // 添加 reviews (分页)
+        List<PublicProfileReviewRecord> reviews = getReviewsForProfile(record.profileId);
+        JsonObject reviewsObj = new JsonObject();
+        JsonArray reviewsArray = new JsonArray();
+        for (PublicProfileReviewRecord review : reviews) {
+            reviewsArray.add(buildReviewResponse(review));
+        }
+        reviewsObj.add("content", reviewsArray);
+        reviewsObj.addProperty("last", true);
+        reviewsObj.addProperty("totalPages", 1);
+        reviewsObj.addProperty("totalElements", reviews.size());
+        reviewsObj.addProperty("size", reviews.size());
+        reviewsObj.addProperty("numberOfElements", reviews.size());
+        json.add("reviews", reviewsObj);
+        
+        return json;
     }
 
-    public synchronized JsonObject getProfileForUpdate(long profileId) {
-        PublicProfileRecord profile = state.profilesById.get(profileId);
-        if (profile == null || !profile.listedPublicly) {
+    public synchronized JsonObject buildFullProfileResponse(long profileId, AccountRecord viewer) {
+        PublicProfileRecord record = state.profilesById.get(profileId);
+        if (record == null || !record.listedPublicly) {
             return null;
         }
-        
-        JsonObject result = new JsonObject();
-        result.addProperty("profileId", profile.profileId);
-        result.addProperty("name", profile.name);
-        result.addProperty("version", profile.version);
-        result.addProperty("updatedDate", profile.updatedDate);
-        if (profile.data != null) {
-            result.add("data", profile.data.deepCopy());
-        }
-        
-        return result;
+        return buildPublicProfileResponse(record, viewer);
     }
 
-    // ==================== 分页获取评价 ====================
+    public synchronized JsonObject buildRemoteProfileDataResponse(PublicProfileRecord record) {
+        JsonObject json = new JsonObject();
+        json.addProperty("name", record.name);
+        json.addProperty("vapeVersion", "4.21");
+        json.addProperty("profileId", record.profileId);
+        json.addProperty("version", record.version);
+        json.addProperty("updatedDate", formatDate(record.updatedDate));
+        if (record.data != null) {
+            json.add("data", record.data.deepCopy());
+        }
+        return json;
+    }
+
+    public synchronized JsonObject buildRemoteProfileDataResponse(long profileId) {
+        PublicProfileRecord record = state.profilesById.get(profileId);
+        if (record == null || !record.listedPublicly) {
+            return null;
+        }
+        return buildRemoteProfileDataResponse(record);
+    }
+
+    public synchronized JsonObject buildReviewResponse(PublicProfileReviewRecord review) {
+        JsonObject json = new JsonObject();
+        json.addProperty("commentId", review.reviewId);
+        json.addProperty("profileId", review.profileId);
+        json.addProperty("message", review.message);
+        json.addProperty("liked", review.liked);
+        json.addProperty("createdDate", formatDate(review.createdDate));
+        json.addProperty("updatedDate", formatDate(review.updatedDate));
+        json.addProperty("version", review.version);
+        json.addProperty("latest", review.latest);
+        json.addProperty("read", review.read);
+        
+        if (review.responseId != null) {
+            getReviewResponse(review.responseId).ifPresent(response -> {
+                json.add("response", buildReviewResponseResponse(response));
+            });
+        }
+        
+        account(review.userId).ifPresent(acc -> {
+            JsonObject commenter = new JsonObject();
+            commenter.addProperty("userId", acc.userId);
+            commenter.addProperty("username", acc.username);
+            json.add("commenter", commenter);
+        });
+        
+        return json;
+    }
+
+    public synchronized JsonObject buildReviewResponseResponse(PublicProfileReviewResponseRecord response) {
+        JsonObject json = new JsonObject();
+        json.addProperty("id", response.id);
+        json.addProperty("reviewId", response.reviewId);
+        json.addProperty("response", response.response);
+        json.addProperty("createdDate", formatDate(response.createdDate));
+        json.addProperty("updatedDate", formatDate(response.updatedDate));
+        return json;
+    }
+
+    public synchronized List<PublicProfileRecord> getAllPublicProfiles() {
+        return new ArrayList<>(state.profilesById.values());
+    }
+
+    // ==================== 分页获取评价（完整版） ====================
 
     public synchronized JsonObject getReviewPage(long profileId, long page) {
         List<PublicProfileReviewRecord> reviews = getReviewsForProfile(profileId);
@@ -1137,39 +1274,22 @@ public final class FileStore {
         int start = (int)(page * pageSize);
         int end = Math.min(start + pageSize, reviews.size());
         
-        if (start >= reviews.size()) {
-            JsonObject emptyResult = new JsonObject();
-            emptyResult.add("content", new JsonArray());
-            emptyResult.addProperty("last", true);
-            emptyResult.addProperty("totalPages", (int)Math.ceil((double)reviews.size() / pageSize));
-            emptyResult.addProperty("totalElements", reviews.size());
-            emptyResult.addProperty("size", pageSize);
-            emptyResult.addProperty("numberOfElements", 0);
-            return emptyResult;
-        }
-        
-        List<PublicProfileReviewRecord> paged = reviews.subList(start, end);
-        
         JsonObject result = new JsonObject();
         JsonArray content = new JsonArray();
-        for (PublicProfileReviewRecord review : paged) {
-            JsonObject reviewJson = review.toJson();
-            account(review.userId).ifPresent(acc -> {
-                reviewJson.add("commenter", acc.accountJson());
-            });
-            if (review.responseId != null) {
-                getReviewResponse(review.responseId).ifPresent(response -> {
-                    reviewJson.add("response", response.toJson());
-                });
+        
+        if (start < reviews.size()) {
+            List<PublicProfileReviewRecord> paged = reviews.subList(start, end);
+            for (PublicProfileReviewRecord review : paged) {
+                content.add(buildReviewResponse(review));
             }
-            content.add(reviewJson);
         }
+        
         result.add("content", content);
         result.addProperty("last", end >= reviews.size());
         result.addProperty("totalPages", (int)Math.ceil((double)reviews.size() / pageSize));
         result.addProperty("totalElements", reviews.size());
         result.addProperty("size", pageSize);
-        result.addProperty("numberOfElements", paged.size());
+        result.addProperty("numberOfElements", content.size());
         return result;
     }
 
@@ -1187,7 +1307,7 @@ public final class FileStore {
         return HexFormat.of().formatHex(bytes);
     }
 
-        private ServiceState load() throws IOException {
+    private ServiceState load() throws IOException {
         if (!Files.exists(file)) {
             return new ServiceState();
         }
@@ -1196,9 +1316,7 @@ public final class FileStore {
             ServiceState loaded = gson.fromJson(json, ServiceState.class);
             return loaded == null ? new ServiceState() : loaded;
         } catch (JsonSyntaxException e) {
-            // 如果解析失败，尝试修复损坏的数据
             System.err.println("Failed to parse data file, attempting to recover: " + e.getMessage());
-            // 备份损坏的文件
             Path backup = file.resolveSibling(file.getFileName() + ".corrupted");
             Files.copy(file, backup, StandardCopyOption.REPLACE_EXISTING);
             System.err.println("Corrupted file backed up to: " + backup);
@@ -1241,7 +1359,6 @@ public final class FileStore {
             state.tagsByLowercase = new LinkedHashMap<>();
         }
         
-        // 修复 profilesById 中 data 字段为 null 的情况
         for (PublicProfileRecord profile : state.profilesById.values()) {
             if (profile.data == null) {
                 profile.data = new JsonObject();
@@ -1275,15 +1392,6 @@ public final class FileStore {
                 account.onlineSettings = AccountRecord.defaultOnlineSettings();
             }
         }
-        
-        for (AccountRecord account : state.accountsByToken.values()) {
-            if (account.globalSettings == null) {
-                account.globalSettings = AccountRecord.defaultGlobalSettings();
-            }
-            if (account.onlineSettings == null) {
-                account.onlineSettings = AccountRecord.defaultOnlineSettings();
-            }
-        }
     }
 
     private void save() throws IOException {
@@ -1307,134 +1415,4 @@ public final class FileStore {
     public record PartyInviteDecision(int status, PartyRecord party) {}
     public record PartyLeaveResult(boolean successful, PartyRecord party, long newLeaderId) {}
     public record LoaderLoginResult(String token, AccountRecord account) {}
-	
-	public synchronized JsonObject buildPublicProfileResponse(PublicProfileRecord record, AccountRecord viewer) {
-        JsonObject json = new JsonObject();
-        json.addProperty("profileId", record.profileId);
-        json.addProperty("name", record.name);
-        json.addProperty("description", record.description != null ? record.description : "");
-        
-        JsonArray tagsArray = new JsonArray();
-        for (String tag : record.tags) {
-            tagsArray.add(tag);
-        }
-        json.add("tags", tagsArray);
-        
-        if (record.data != null) {
-            json.add("data", record.data.deepCopy());
-        }
-        
-        json.addProperty("shareCode", record.shareCode);
-        json.addProperty("version", record.version);
-        json.addProperty("likes", record.likes);
-        json.addProperty("dislikes", record.dislikes);
-        json.addProperty("downloads", record.downloads);
-        json.addProperty("creationDate", record.creationDate);
-        json.addProperty("updatedDate", record.updatedDate);
-        
-        if (!record.uploadAnonymously && viewer != null) {
-            JsonObject owner = new JsonObject();
-            owner.addProperty("userId", record.userId);
-            account(record.userId).ifPresent(acc -> {
-                owner.addProperty("username", acc.username);
-            });
-            json.add("owner", owner);
-        }
-        
-        JsonObject shareInfo = new JsonObject();
-        shareInfo.addProperty("shareCode", record.shareCode);
-        shareInfo.addProperty("listedPublicly", record.listedPublicly);
-        shareInfo.addProperty("shareCodeFriendsOnly", record.shareCodeFriendsOnly);
-        shareInfo.addProperty("uploadAnonymously", record.uploadAnonymously);
-        if (record.derivedFrom != null) {
-            shareInfo.addProperty("derivedFrom", record.derivedFrom);
-        }
-        shareInfo.addProperty("unreadNotifications", record.unreadNotifications);
-        json.add("shareInfo", shareInfo);
-        
-        if (viewer != null) {
-            getReviewByUserAndProfile(viewer.userId, record.profileId).ifPresent(review -> {
-                json.add("viewerReview", buildReviewResponse(review));
-            });
-        }
-        
-        JsonArray reviewsArray = new JsonArray();
-        for (PublicProfileReviewRecord review : getReviewsForProfile(record.profileId)) {
-            reviewsArray.add(buildReviewResponse(review));
-        }
-        json.add("reviews", reviewsArray);
-        
-        return json;
-    }
-
-    public synchronized JsonObject buildFullProfileResponse(long profileId, AccountRecord viewer) {
-        PublicProfileRecord record = state.profilesById.get(profileId);
-        if (record == null || !record.listedPublicly) {
-            return null;
-        }
-        return buildPublicProfileResponse(record, viewer);
-    }
-
-    public synchronized JsonObject buildRemoteProfileDataResponse(PublicProfileRecord record) {
-        JsonObject json = new JsonObject();
-        json.addProperty("name", record.name);
-        json.addProperty("vapeVersion", "4.21");
-        json.addProperty("profileId", record.profileId);
-        json.addProperty("version", record.version);
-        json.addProperty("updatedDate", record.updatedDate);
-        if (record.data != null) {
-            json.add("data", record.data.deepCopy());
-        }
-        return json;
-    }
-
-    public synchronized JsonObject buildRemoteProfileDataResponse(long profileId) {
-        PublicProfileRecord record = state.profilesById.get(profileId);
-        if (record == null || !record.listedPublicly) {
-            return null;
-        }
-        return buildRemoteProfileDataResponse(record);
-    }
-
-    public synchronized JsonObject buildReviewResponse(PublicProfileReviewRecord review) {
-        JsonObject json = new JsonObject();
-        json.addProperty("commentId", review.reviewId);
-        json.addProperty("profileId", review.profileId);
-        json.addProperty("userId", review.userId);
-        json.addProperty("message", review.message);
-        json.addProperty("liked", review.liked);
-        json.addProperty("createdDate", review.createdDate);
-        json.addProperty("updatedDate", review.updatedDate);
-        json.addProperty("version", review.version);
-        json.addProperty("latest", review.latest);
-        json.addProperty("read", review.read);
-        if (review.responseId != null) {
-            json.addProperty("responseId", review.responseId);
-            getReviewResponse(review.responseId).ifPresent(response -> {
-                json.add("response", buildReviewResponseResponse(response));
-            });
-        }
-        account(review.userId).ifPresent(acc -> {
-            JsonObject commenter = new JsonObject();
-            commenter.addProperty("userId", acc.userId);
-            commenter.addProperty("username", acc.username);
-            json.add("commenter", commenter);
-        });
-        return json;
-    }
-
-    public synchronized JsonObject buildReviewResponseResponse(PublicProfileReviewResponseRecord response) {
-        JsonObject json = new JsonObject();
-        json.addProperty("id", response.id);
-        json.addProperty("reviewId", response.reviewId);
-        json.addProperty("userId", response.userId);
-        json.addProperty("response", response.response);
-        json.addProperty("createdDate", response.createdDate);
-        json.addProperty("updatedDate", response.updatedDate);
-        return json;
-    }
-
-    public synchronized List<PublicProfileRecord> getAllPublicProfiles() {
-        return new ArrayList<>(state.profilesById.values());
-    }
 }

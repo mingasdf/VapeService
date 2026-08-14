@@ -4,7 +4,9 @@ import com.google.gson.Gson;
 import com.google.gson.GsonBuilder;
 import com.google.gson.JsonArray;
 import com.google.gson.JsonElement;
+import com.google.gson.JsonNull;
 import com.google.gson.JsonObject;
+import com.google.gson.JsonParser;
 import java.io.IOException;
 import java.nio.charset.StandardCharsets;
 import java.nio.file.AtomicMoveNotSupportedException;
@@ -12,12 +14,18 @@ import java.nio.file.Files;
 import java.nio.file.Path;
 import java.nio.file.StandardCopyOption;
 import java.security.SecureRandom;
+import java.util.ArrayList;
+import java.util.Collections;
+import java.util.Comparator;
 import java.util.HexFormat;
 import java.util.LinkedHashMap;
+import java.util.List;
 import java.util.Map;
 import java.util.Optional;
 import java.util.Set;
 import java.util.UUID;
+import java.util.stream.Collectors;
+import java.util.stream.Stream;
 
 public final class FileStore {
     private static final long CHALLENGE_TTL_MILLIS = 5 * 60 * 1000L;
@@ -532,6 +540,31 @@ public final class FileStore {
         if (state.parties == null) {
             state.parties = new LinkedHashMap<>();
         }
+        if (state.profilesById == null) {
+            state.profilesById = new LinkedHashMap<>();
+        }
+        if (state.profilesByShareCode == null) {
+            state.profilesByShareCode = new LinkedHashMap<>();
+        }
+        if (state.reviewsById == null) {
+            state.reviewsById = new LinkedHashMap<>();
+        }
+        if (state.reviewResponsesById == null) {
+            state.reviewResponsesById = new LinkedHashMap<>();
+        }
+        if (state.reportsById == null) {
+            state.reportsById = new LinkedHashMap<>();
+        }
+        if (state.tagsByLowercase == null) {
+            state.tagsByLowercase = new LinkedHashMap<>();
+        }
+        
+        for (PublicProfileRecord profile : state.profilesById.values()) {
+            for (String tag : profile.tags) {
+                updateTagUsage(tag, 1);
+            }
+        }
+        
         for (AccountRecord account : state.accountsByToken.values()) {
             account.accountCreation = AccountRecord.normalizeTimestamp(account.accountCreation);
             if (account.onlineFriends == null) {
@@ -562,5 +595,568 @@ public final class FileStore {
         } catch (AtomicMoveNotSupportedException ignored) {
             Files.move(temporary, file, StandardCopyOption.REPLACE_EXISTING);
         }
+    }
+
+    public synchronized PublicProfileRecord createPublicProfile(String token, JsonObject request) throws IOException {
+        AccountRecord account = requireAccount(token);
+        
+        String name = request.has("name") ? request.get("name").getAsString() : "Untitled";
+        if (name.length() > 48) {
+            name = name.substring(0, 47);
+        }
+        
+        PublicProfileRecord record = new PublicProfileRecord();
+        record.profileId = state.nextPublicProfileId++;
+        record.userId = account.userId;
+        record.name = name;
+        record.description = request.has("description") ? request.get("description").getAsString() : "";
+        
+        if (request.has("tags")) {
+            JsonArray tagsArray = request.getAsJsonArray("tags");
+            for (JsonElement tag : tagsArray) {
+                String normalized = tag.getAsString().trim().toLowerCase();
+                if (!normalized.isEmpty() && normalized.length() <= 16) {
+                    record.tags.add(normalized);
+                    updateTagUsage(normalized, 1);
+                }
+            }
+        }
+        
+        if (request.has("data")) {
+            record.data = request.get("data").getAsJsonObject().deepCopy();
+        }
+        
+        record.shareCode = generateShareCode();
+        record.listedPublicly = request.has("listedPublicly") ? request.get("listedPublicly").getAsBoolean() : true;
+        record.shareCodeFriendsOnly = request.has("shareCodeFriendsOnly") ? request.get("shareCodeFriendsOnly").getAsBoolean() : false;
+        record.uploadAnonymously = request.has("uploadAnonymously") ? request.get("uploadAnonymously").getAsBoolean() : false;
+        
+        if (request.has("derivedFrom")) {
+            record.derivedFrom = request.get("derivedFrom").getAsLong();
+        }
+        
+        state.profilesById.put(record.profileId, record);
+        state.profilesByShareCode.put(record.shareCode, record.profileId);
+        save();
+        return record;
+    }
+
+    public synchronized PublicProfileRecord updatePublicProfile(String token, long profileId, JsonObject request) throws IOException {
+        AccountRecord account = requireAccount(token);
+        PublicProfileRecord existing = state.profilesById.get(profileId);
+        if (existing == null || existing.userId != account.userId) {
+            throw new IllegalArgumentException("Profile not found or not owned by user");
+        }
+        
+        if (request.has("name")) {
+            String name = request.get("name").getAsString();
+            if (name.length() > 48) name = name.substring(0, 47);
+            existing.name = name;
+        }
+        
+        if (request.has("description")) {
+            existing.description = request.get("description").getAsString();
+        }
+        
+        if (request.has("tags")) {
+            for (String oldTag : existing.tags) {
+                updateTagUsage(oldTag, -1);
+            }
+            existing.tags.clear();
+            JsonArray tagsArray = request.getAsJsonArray("tags");
+            for (JsonElement tag : tagsArray) {
+                String normalized = tag.getAsString().trim().toLowerCase();
+                if (!normalized.isEmpty() && normalized.length() <= 16) {
+                    existing.tags.add(normalized);
+                    updateTagUsage(normalized, 1);
+                }
+            }
+        }
+        
+        if (request.has("data")) {
+            existing.data = request.get("data").getAsJsonObject().deepCopy();
+        }
+        
+        if (request.has("listedPublicly")) {
+            existing.listedPublicly = request.get("listedPublicly").getAsBoolean();
+        }
+        
+        if (request.has("shareCodeFriendsOnly")) {
+            existing.shareCodeFriendsOnly = request.get("shareCodeFriendsOnly").getAsBoolean();
+        }
+        
+        if (request.has("uploadAnonymously")) {
+            existing.uploadAnonymously = request.get("uploadAnonymously").getAsBoolean();
+        }
+        
+        existing.version++;
+        existing.updatedDate = System.currentTimeMillis();
+        save();
+        return existing;
+    }
+
+    public synchronized Optional<PublicProfileRecord> getPublicProfile(long profileId) {
+        return Optional.ofNullable(state.profilesById.get(profileId));
+    }
+
+    public synchronized Optional<PublicProfileRecord> getPublicProfileByShareCode(String shareCode) {
+        Long profileId = state.profilesByShareCode.get(shareCode.toUpperCase());
+        if (profileId != null) {
+            return Optional.ofNullable(state.profilesById.get(profileId));
+        }
+        return Optional.empty();
+    }
+
+    public synchronized boolean deletePublicProfile(String token, long profileId) throws IOException {
+        AccountRecord account = requireAccount(token);
+        PublicProfileRecord existing = state.profilesById.get(profileId);
+        if (existing == null || existing.userId != account.userId) {
+            return false;
+        }
+        
+        for (String tag : existing.tags) {
+            updateTagUsage(tag, -1);
+        }
+        
+        List<Long> reviewIdsToDelete = new ArrayList<>();
+        for (PublicProfileReviewRecord review : state.reviewsById.values()) {
+            if (review.profileId == profileId) {
+                reviewIdsToDelete.add(review.reviewId);
+            }
+        }
+        for (Long reviewId : reviewIdsToDelete) {
+            state.reviewsById.remove(reviewId);
+        }
+        
+        state.profilesById.remove(profileId);
+        if (existing.shareCode != null) {
+            state.profilesByShareCode.remove(existing.shareCode);
+        }
+        save();
+        return true;
+    }
+
+    public synchronized PublicProfileRecord incrementDownloads(long profileId) throws IOException {
+        PublicProfileRecord record = state.profilesById.get(profileId);
+        if (record == null) {
+            throw new IllegalArgumentException("Profile not found");
+        }
+        record.downloads++;
+        save();
+        return record;
+    }
+
+    public synchronized JsonObject listPublicProfiles(long userId, int page, int size, String sortBy, String searchQuery, List<String> tags) {
+        Stream<PublicProfileRecord> stream = state.profilesById.values().stream()
+            .filter(p -> p.listedPublicly);
+        
+        if (searchQuery != null && !searchQuery.isEmpty()) {
+            String query = searchQuery.toLowerCase();
+            stream = stream.filter(p -> 
+                p.name.toLowerCase().contains(query) || 
+                (p.description != null && p.description.toLowerCase().contains(query))
+            );
+        }
+        
+        if (tags != null && !tags.isEmpty()) {
+            stream = stream.filter(p -> p.tags.stream().anyMatch(tags::contains));
+        }
+        
+        if (sortBy != null) {
+            switch (sortBy) {
+                case "downloads":
+                case "downloaded":
+                    stream = stream.sorted(Comparator.comparingLong((PublicProfileRecord p) -> p.downloads).reversed());
+                    break;
+                case "createdDate":
+                case "newest":
+                    stream = stream.sorted(Comparator.comparingLong((PublicProfileRecord p) -> p.creationDate).reversed());
+                    break;
+                case "rating":
+                case "rated":
+                    stream = stream.sorted((a, b) -> {
+                        double ratingA = (double)(a.likes + 1) / (a.likes + a.dislikes + 2);
+                        double ratingB = (double)(b.likes + 1) / (b.likes + b.dislikes + 2);
+                        return Double.compare(ratingB, ratingA);
+                    });
+                    break;
+                case "updatedDate":
+                default:
+                    stream = stream.sorted(Comparator.comparingLong((PublicProfileRecord p) -> p.updatedDate).reversed());
+                    break;
+            }
+        }
+        
+        List<PublicProfileRecord> all = stream.collect(Collectors.toList());
+        int total = all.size();
+        int start = Math.min(page * size, total);
+        int end = Math.min(start + size, total);
+        List<PublicProfileRecord> paged = all.subList(start, end);
+        
+        JsonObject result = new JsonObject();
+        JsonArray content = new JsonArray();
+        for (PublicProfileRecord record : paged) {
+            JsonObject summary = record.toJson();
+            account(record.userId).ifPresent(acc -> {
+                if (!record.uploadAnonymously) {
+                    summary.add("owner", acc.accountJson());
+                }
+            });
+            long currentUserId = userId;
+            if (currentUserId > 0) {
+                boolean hasReviewed = state.reviewsById.values().stream()
+                    .anyMatch(r -> r.profileId == record.profileId && r.userId == currentUserId);
+                summary.addProperty("hasReviewed", hasReviewed);
+            }
+            content.add(summary);
+        }
+        
+        result.add("content", content);
+        result.addProperty("last", end >= total);
+        result.addProperty("totalPages", (int)Math.ceil((double)total / size));
+        result.addProperty("totalElements", total);
+        result.addProperty("size", size);
+        result.addProperty("numberOfElements", paged.size());
+        return result;
+    }
+
+    public synchronized PublicProfileReviewRecord createReview(String token, long profileId, String message, boolean liked) throws IOException {
+        AccountRecord account = requireAccount(token);
+        PublicProfileRecord profile = state.profilesById.get(profileId);
+        if (profile == null) {
+            throw new IllegalArgumentException("Profile not found");
+        }
+        
+        for (PublicProfileReviewRecord existing : state.reviewsById.values()) {
+            if (existing.profileId == profileId && existing.userId == account.userId) {
+                throw new IllegalArgumentException("Already reviewed this profile");
+            }
+        }
+        
+        for (PublicProfileReviewRecord existing : state.reviewsById.values()) {
+            if (existing.profileId == profileId && existing.latest) {
+                existing.latest = false;
+            }
+        }
+        
+        PublicProfileReviewRecord review = new PublicProfileReviewRecord();
+        review.reviewId = state.nextReviewId++;
+        review.profileId = profileId;
+        review.userId = account.userId;
+        review.message = message;
+        review.liked = liked;
+        
+        if (liked) {
+            profile.likes++;
+        } else {
+            profile.dislikes++;
+        }
+        
+        profile.unreadNotifications++;
+        profile.updatedDate = System.currentTimeMillis();
+        
+        state.reviewsById.put(review.reviewId, review);
+        save();
+        return review;
+    }
+
+    public synchronized PublicProfileReviewRecord updateReview(String token, long reviewId, String message) throws IOException {
+        AccountRecord account = requireAccount(token);
+        PublicProfileReviewRecord review = state.reviewsById.get(reviewId);
+        if (review == null || review.userId != account.userId) {
+            throw new IllegalArgumentException("Review not found or not owned by user");
+        }
+        
+        for (PublicProfileReviewRecord existing : state.reviewsById.values()) {
+            if (existing.profileId == review.profileId && existing.latest) {
+                existing.latest = false;
+            }
+        }
+        
+        review.message = message;
+        review.version++;
+        review.updatedDate = System.currentTimeMillis();
+        review.latest = true;
+        
+        PublicProfileRecord profile = state.profilesById.get(review.profileId);
+        if (profile != null) {
+            profile.updatedDate = System.currentTimeMillis();
+        }
+        
+        save();
+        return review;
+    }
+
+    public synchronized boolean deleteReview(String token, long reviewId) throws IOException {
+        AccountRecord account = requireAccount(token);
+        PublicProfileReviewRecord review = state.reviewsById.get(reviewId);
+        if (review == null || review.userId != account.userId) {
+            return false;
+        }
+        
+        PublicProfileRecord profile = state.profilesById.get(review.profileId);
+        if (profile != null) {
+            if (review.liked) {
+                profile.likes = Math.max(0, profile.likes - 1);
+            } else {
+                profile.dislikes = Math.max(0, profile.dislikes - 1);
+            }
+        }
+        
+        state.reviewsById.remove(reviewId);
+        save();
+        return true;
+    }
+
+    public synchronized List<PublicProfileReviewRecord> getReviewsForProfile(long profileId) {
+        return state.reviewsById.values().stream()
+            .filter(r -> r.profileId == profileId)
+            .sorted(Comparator.comparingLong((PublicProfileReviewRecord r) -> r.createdDate).reversed())
+            .collect(Collectors.toList());
+    }
+
+    public synchronized Optional<PublicProfileReviewRecord> getReviewByUserAndProfile(long userId, long profileId) {
+        return state.reviewsById.values().stream()
+            .filter(r -> r.profileId == profileId && r.userId == userId)
+            .findFirst();
+    }
+
+    public synchronized void markReviewRead(long reviewId) throws IOException {
+        PublicProfileReviewRecord review = state.reviewsById.get(reviewId);
+        if (review != null) {
+            review.read = true;
+            save();
+        }
+    }
+
+    public synchronized long getUnreadNotificationCount(long userId) {
+        long count = 0;
+        for (PublicProfileRecord profile : state.profilesById.values()) {
+            if (profile.userId == userId) {
+                count += profile.unreadNotifications;
+            }
+        }
+        return count;
+    }
+
+    public synchronized void clearUnreadNotifications(long userId) throws IOException {
+        for (PublicProfileRecord profile : state.profilesById.values()) {
+            if (profile.userId == userId) {
+                profile.unreadNotifications = 0L;
+            }
+        }
+        save();
+    }
+
+    public synchronized PublicProfileReviewResponseRecord createReviewResponse(String token, long reviewId, String response) throws IOException {
+        AccountRecord account = requireAccount(token);
+        PublicProfileReviewRecord review = state.reviewsById.get(reviewId);
+        if (review == null) {
+            throw new IllegalArgumentException("Review not found");
+        }
+        
+        PublicProfileRecord profile = state.profilesById.get(review.profileId);
+        if (profile == null || profile.userId != account.userId) {
+            throw new IllegalArgumentException("Not authorized to respond to this review");
+        }
+        
+        PublicProfileReviewResponseRecord responseRecord = new PublicProfileReviewResponseRecord();
+        responseRecord.id = state.nextReviewResponseId++;
+        responseRecord.reviewId = reviewId;
+        responseRecord.userId = account.userId;
+        responseRecord.response = response;
+        
+        review.responseId = responseRecord.id;
+        review.updatedDate = System.currentTimeMillis();
+        
+        state.reviewResponsesById.put(responseRecord.id, responseRecord);
+        save();
+        return responseRecord;
+    }
+
+    public synchronized Optional<PublicProfileReviewResponseRecord> getReviewResponse(long responseId) {
+        return Optional.ofNullable(state.reviewResponsesById.get(responseId));
+    }
+
+    public synchronized PublicProfileReportRecord createReport(String token, long profileId, String reason, String details) throws IOException {
+        AccountRecord account = requireAccount(token);
+        PublicProfileRecord profile = state.profilesById.get(profileId);
+        if (profile == null) {
+            throw new IllegalArgumentException("Profile not found");
+        }
+        
+        for (PublicProfileReportRecord existing : state.reportsById.values()) {
+            if (existing.profileId == profileId && existing.userId == account.userId && !existing.resolved) {
+                throw new IllegalArgumentException("Already reported this profile");
+            }
+        }
+        
+        PublicProfileReportRecord report = new PublicProfileReportRecord();
+        report.reportId = state.nextReportId++;
+        report.profileId = profileId;
+        report.userId = account.userId;
+        report.reason = reason;
+        report.details = details;
+        
+        state.reportsById.put(report.reportId, report);
+        save();
+        return report;
+    }
+
+    public synchronized List<PublicProfileReportRecord> getReportsForProfile(long profileId) {
+        return state.reportsById.values().stream()
+            .filter(r -> r.profileId == profileId)
+            .collect(Collectors.toList());
+    }
+
+    public synchronized boolean resolveReport(String token, long reportId) throws IOException {
+        AccountRecord account = requireAccount(token);
+        PublicProfileReportRecord report = state.reportsById.get(reportId);
+        if (report == null) {
+            return false;
+        }
+        
+        report.resolved = true;
+        report.resolvedBy = account.userId;
+        save();
+        return true;
+    }
+
+    public synchronized JsonObject getPopularTags(int limit) {
+        JsonArray tagsArray = new JsonArray();
+        List<PublicProfileTagRecord> tags = state.tagsByLowercase.values().stream()
+            .sorted(Comparator.comparingLong((PublicProfileTagRecord t) -> t.usageCount).reversed())
+            .limit(limit > 0 ? limit : 20)
+            .collect(Collectors.toList());
+        
+        for (PublicProfileTagRecord tag : tags) {
+            tagsArray.add(tag.toJson());
+        }
+        
+        JsonObject result = new JsonObject();
+        result.add("tags", tagsArray);
+        return result;
+    }
+
+    private void updateTagUsage(String tag, int delta) {
+        String normalized = tag.toLowerCase();
+        PublicProfileTagRecord tagRecord = state.tagsByLowercase.get(normalized);
+        if (tagRecord == null) {
+            if (delta > 0) {
+                state.tagsByLowercase.put(normalized, new PublicProfileTagRecord(tag));
+            }
+        } else {
+            tagRecord.usageCount += delta;
+            if (tagRecord.usageCount <= 0) {
+                state.tagsByLowercase.remove(normalized);
+            }
+        }
+    }
+
+    public synchronized String regenerateShareCode(String token, long profileId) throws IOException {
+        AccountRecord account = requireAccount(token);
+        PublicProfileRecord profile = state.profilesById.get(profileId);
+        if (profile == null || profile.userId != account.userId) {
+            throw new IllegalArgumentException("Profile not found or not owned by user");
+        }
+        
+        if (profile.shareCode != null) {
+            state.profilesByShareCode.remove(profile.shareCode);
+        }
+        
+        String newCode = generateShareCode();
+        profile.shareCode = newCode;
+        state.profilesByShareCode.put(newCode, profileId);
+        save();
+        return newCode;
+    }
+
+    private String generateShareCode() {
+        String chars = "ABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789";
+        StringBuilder code = new StringBuilder();
+        SecureRandom random = new SecureRandom();
+        for (int i = 0; i < 8; i++) {
+            code.append(chars.charAt(random.nextInt(chars.length())));
+        }
+        String newCode = code.toString();
+        while (state.profilesByShareCode.containsKey(newCode)) {
+            code.setLength(0);
+            for (int i = 0; i < 8; i++) {
+                code.append(chars.charAt(random.nextInt(chars.length())));
+            }
+            newCode = code.toString();
+        }
+        return newCode;
+    }
+
+    public synchronized JsonObject getProfileStatistics(long profileId) {
+        PublicProfileRecord profile = state.profilesById.get(profileId);
+        if (profile == null) {
+            return new JsonObject();
+        }
+        
+        JsonObject stats = new JsonObject();
+        stats.addProperty("profileId", profileId);
+        stats.addProperty("likes", profile.likes);
+        stats.addProperty("dislikes", profile.dislikes);
+        stats.addProperty("downloads", profile.downloads);
+        
+        long reviewCount = state.reviewsById.values().stream()
+            .filter(r -> r.profileId == profileId)
+            .count();
+        stats.addProperty("reviewCount", reviewCount);
+        
+        long reportCount = state.reportsById.values().stream()
+            .filter(r -> r.profileId == profileId && !r.resolved)
+            .count();
+        stats.addProperty("openReportCount", reportCount);
+        
+        return stats;
+    }
+
+    public synchronized JsonObject getProfileWithFullDetails(long profileId, long viewerUserId) {
+        PublicProfileRecord profile = state.profilesById.get(profileId);
+        if (profile == null || !profile.listedPublicly) {
+            return null;
+        }
+        
+        JsonObject full = profile.toJson();
+        
+        account(profile.userId).ifPresent(acc -> {
+            if (!profile.uploadAnonymously) {
+                full.add("owner", acc.accountJson());
+            }
+        });
+        
+        JsonArray reviewsArray = new JsonArray();
+        for (PublicProfileReviewRecord review : getReviewsForProfile(profileId)) {
+            JsonObject reviewJson = review.toJson();
+            account(review.userId).ifPresent(acc -> {
+                reviewJson.add("commenter", acc.accountJson());
+            });
+            if (review.responseId != null) {
+                getReviewResponse(review.responseId).ifPresent(response -> {
+                    reviewJson.add("response", response.toJson());
+                });
+            }
+            reviewsArray.add(reviewJson);
+        }
+        full.add("reviews", reviewsArray);
+        
+        getReviewByUserAndProfile(viewerUserId, profileId).ifPresent(review -> {
+            full.add("viewerReview", review.toJson());
+        });
+        
+        JsonObject shareInfo = new JsonObject();
+        shareInfo.addProperty("shareCode", profile.shareCode);
+        shareInfo.addProperty("listedPublicly", profile.listedPublicly);
+        shareInfo.addProperty("shareCodeFriendsOnly", profile.shareCodeFriendsOnly);
+        shareInfo.addProperty("uploadAnonymously", profile.uploadAnonymously);
+        if (profile.derivedFrom != null) {
+            shareInfo.addProperty("derivedFrom", profile.derivedFrom);
+        }
+        full.add("shareInfo", shareInfo);
+        
+        return full;
     }
 }

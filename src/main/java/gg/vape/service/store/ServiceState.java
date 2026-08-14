@@ -9,9 +9,20 @@ final class ServiceState {
     long nextPublicProfileId = 1L;
     long nextFriendRequestId = 1L;
     long nextPartyId = 1L;
+    long nextReviewId = 1L;
+    long nextReportId = 1L;
+    long nextReviewResponseId = 1L;
+    
     Map<String, AccountRecord> accountsByToken = new LinkedHashMap<>();
     Map<String, AuthChallengeRecord> challenges = new LinkedHashMap<>();
     Map<String, JsonObject> publicProfiles = new LinkedHashMap<>();
     Map<Long, FriendRequestRecord> friendRequests = new LinkedHashMap<>();
     Map<Long, PartyRecord> parties = new LinkedHashMap<>();
+    
+    Map<Long, PublicProfileRecord> profilesById = new LinkedHashMap<>();
+    Map<String, Long> profilesByShareCode = new LinkedHashMap<>();
+    Map<Long, PublicProfileReviewRecord> reviewsById = new LinkedHashMap<>();
+    Map<Long, PublicProfileReviewResponseRecord> reviewResponsesById = new LinkedHashMap<>();
+    Map<Long, PublicProfileReportRecord> reportsById = new LinkedHashMap<>();
+    Map<String, PublicProfileTagRecord> tagsByLowercase = new LinkedHashMap<>();
 }

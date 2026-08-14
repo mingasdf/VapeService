@@ -199,14 +199,14 @@ public final class LegacyHttpServer implements AutoCloseable {
             sendEnvelope(exchange, true, gson.toJsonTree(store.reserveProfileId(token)), null);
         }
 
-        // ==================== 云配市场 API ====================
-        // 获取标签 - 客户端调用 /api/v1/{token}/profile/public/tags (GET)
+        // ==================== 云配市场 API（修复版） ====================
+        // 获取标签 - GET /api/v1/{token}/profile/public/tags
         else if ("profile/public/tags".equals(operation)) {
             requireMethod(exchange, "GET");
             int limit = parseQueryParam(exchange, "limit", 20);
             sendEnvelope(exchange, true, store.getPopularTags(limit), null);
         }
-        // 列出配置 - 客户端调用 /api/v1/{token}/profile/public/list (POST)
+        // 列出配置 - POST /api/v1/{token}/profile/public/list
         else if ("profile/public/list".equals(operation)) {
             requireMethod(exchange, "POST");
             JsonObject request = readJsonObject(exchange);
@@ -227,16 +227,15 @@ public final class LegacyHttpServer implements AutoCloseable {
             JsonObject result = store.listPublicProfiles(account.userId, page, size, sortBy, searchQuery, tags.isEmpty() ? null : tags);
             sendEnvelope(exchange, true, result, null);
         }
-        // 创建配置 - 客户端调用 /api/v1/{token}/profile/public/create (POST)
+        // 创建配置 - POST /api/v1/{token}/profile/public/create
         else if ("profile/public/create".equals(operation)) {
             requireMethod(exchange, "POST");
             JsonObject request = readJsonObject(exchange);
             PublicProfileRecord created = store.createPublicProfile(token, request);
-            // 返回客户端PublicProfile.fromJson期望的格式
             JsonObject response = store.buildPublicProfileResponse(created, account);
             sendEnvelope(exchange, true, response, null);
         }
-        // 编辑配置 - 客户端调用 /api/v1/{token}/profile/public/edit (POST)
+        // 编辑配置 - POST /api/v1/{token}/profile/public/edit
         else if ("profile/public/edit".equals(operation)) {
             requireMethod(exchange, "POST");
             JsonObject request = readJsonObject(exchange);
@@ -248,7 +247,7 @@ public final class LegacyHttpServer implements AutoCloseable {
             JsonObject response = store.buildPublicProfileResponse(updated, account);
             sendEnvelope(exchange, true, response, null);
         }
-        // 删除配置 - 客户端调用 /api/v1/{token}/profile/public/{id}/delete (DELETE)
+        // 删除配置 - DELETE /api/v1/{token}/profile/public/{id}/delete
         else if (operation.matches("profile/public/\\d+/delete")) {
             requireMethod(exchange, "DELETE");
             String idStr = operation.substring("profile/public/".length(), operation.length() - "/delete".length());
@@ -256,19 +255,19 @@ public final class LegacyHttpServer implements AutoCloseable {
             boolean deleted = store.deletePublicProfileById(token, profileId);
             sendEnvelope(exchange, true, gson.toJsonTree(deleted), null);
         }
-        // 查看配置详情 - 客户端调用 /api/v1/{token}/profile/public/{id}/view (GET)
+        // 查看配置详情 - GET /api/v1/{token}/profile/public/{id}/view
         else if (operation.matches("profile/public/\\d+/view")) {
             requireMethod(exchange, "GET");
             String idStr = operation.substring("profile/public/".length(), operation.length() - "/view".length());
             long profileId = Long.parseLong(idStr);
             JsonObject full = store.buildFullProfileResponse(profileId, account);
             if (full == null) {
-                sendEnvelope(exchange, false, JsonNull.INSTANCE, "Profile not found");
+                sendEnvelope(exchange, false, JsonNull.INSTANCE, "Profile not found or not public");
             } else {
                 sendEnvelope(exchange, true, full, null);
             }
         }
-        // 下载配置 - 客户端调用 /api/v1/{token}/profile/public/{id}/download (GET)
+        // 下载配置 - GET /api/v1/{token}/profile/public/{id}/download
         else if (operation.matches("profile/public/\\d+/download")) {
             requireMethod(exchange, "GET");
             String idStr = operation.substring("profile/public/".length(), operation.length() - "/download".length());
@@ -278,24 +277,23 @@ public final class LegacyHttpServer implements AutoCloseable {
                 sendEnvelope(exchange, false, JsonNull.INSTANCE, "Profile not found or not public");
             } else {
                 store.incrementDownloads(profileId);
-                // 返回RemoteProfileData兼容格式
                 JsonObject response = store.buildRemoteProfileDataResponse(profile.get());
                 sendEnvelope(exchange, true, response, null);
             }
         }
-        // 检查更新 - 客户端调用 /api/v1/{token}/profile/public/{id}/update (GET)
+        // 检查更新 - GET /api/v1/{token}/profile/public/{id}/update
         else if (operation.matches("profile/public/\\d+/update")) {
             requireMethod(exchange, "GET");
             String idStr = operation.substring("profile/public/".length(), operation.length() - "/update".length());
             long profileId = Long.parseLong(idStr);
             JsonObject updateData = store.buildRemoteProfileDataResponse(profileId);
             if (updateData == null) {
-                sendEnvelope(exchange, false, JsonNull.INSTANCE, "Profile not found");
+                sendEnvelope(exchange, false, JsonNull.INSTANCE, "Profile not found or not public");
             } else {
                 sendEnvelope(exchange, true, updateData, null);
             }
         }
-        // 重新生成分享码 - 客户端调用 /api/v1/{token}/profile/public/regenerate/sharecode (POST)
+        // 重新生成分享码 - POST /api/v1/{token}/profile/public/regenerate/sharecode
         else if ("profile/public/regenerate/sharecode".equals(operation)) {
             requireMethod(exchange, "POST");
             JsonObject request = readJsonObject(exchange);
@@ -308,7 +306,7 @@ public final class LegacyHttpServer implements AutoCloseable {
             response.addProperty("shareCode", newCode);
             sendEnvelope(exchange, true, response, null);
         }
-        // 通过分享码获取配置 - 客户端调用 /api/v1/{token}/profile/public/sharecode/{code} (GET)
+        // 通过分享码获取配置 - GET /api/v1/{token}/profile/public/sharecode/{code}
         else if (operation.startsWith("profile/public/sharecode/")) {
             requireMethod(exchange, "GET");
             String shareCode = operation.substring("profile/public/sharecode/".length());
@@ -320,7 +318,7 @@ public final class LegacyHttpServer implements AutoCloseable {
                 sendEnvelope(exchange, true, full, null);
             }
         }
-        // 统计信息 - 客户端调用 /api/v1/{token}/profile/public/{id}/statistics (GET)
+        // 统计信息 - GET /api/v1/{token}/profile/public/{id}/statistics
         else if (operation.matches("profile/public/\\d+/statistics")) {
             requireMethod(exchange, "GET");
             String idStr = operation.substring("profile/public/".length(), operation.length() - "/statistics".length());
@@ -329,7 +327,7 @@ public final class LegacyHttpServer implements AutoCloseable {
         }
 
         // ==================== 评价 API ====================
-        // 创建评价 - 客户端调用 /api/v1/{token}/profile/public/review/create (POST)
+        // 创建评价 - POST /api/v1/{token}/profile/public/review/create
         else if ("profile/public/review/create".equals(operation)) {
             requireMethod(exchange, "POST");
             JsonObject request = readJsonObject(exchange);
@@ -343,7 +341,7 @@ public final class LegacyHttpServer implements AutoCloseable {
             JsonObject response = store.buildReviewResponse(review);
             sendEnvelope(exchange, true, response, null);
         }
-        // 删除评价 - 客户端调用 /api/v1/{token}/profile/public/review/delete/{id} (DELETE)
+        // 删除评价 - DELETE /api/v1/{token}/profile/public/review/delete/{id}
         else if (operation.startsWith("profile/public/review/delete/")) {
             requireMethod(exchange, "DELETE");
             String idStr = operation.substring("profile/public/review/delete/".length());
@@ -351,7 +349,7 @@ public final class LegacyHttpServer implements AutoCloseable {
             boolean deleted = store.deleteReview(token, reviewId);
             sendEnvelope(exchange, true, gson.toJsonTree(deleted), null);
         }
-        // 回复评价 - 客户端调用 /api/v1/{token}/profile/public/review/respond/{id} (POST)
+        // 回复评价 - POST /api/v1/{token}/profile/public/review/respond/{id}
         else if (operation.startsWith("profile/public/review/respond/")) {
             requireMethod(exchange, "POST");
             String idStr = operation.substring("profile/public/review/respond/".length());
@@ -365,7 +363,7 @@ public final class LegacyHttpServer implements AutoCloseable {
             JsonObject response = store.buildReviewResponseResponse(responseRecord);
             sendEnvelope(exchange, true, response, null);
         }
-        // 删除回复 - 客户端调用 /api/v1/{token}/profile/public/review/delete/response/{id} (DELETE)
+        // 删除回复 - DELETE /api/v1/{token}/profile/public/review/delete/response/{id}
         else if (operation.startsWith("profile/public/review/delete/response/")) {
             requireMethod(exchange, "DELETE");
             String idStr = operation.substring("profile/public/review/delete/response/".length());
@@ -373,7 +371,7 @@ public final class LegacyHttpServer implements AutoCloseable {
             boolean deleted = store.deleteReviewResponse(token, responseId);
             sendEnvelope(exchange, true, gson.toJsonTree(deleted), null);
         }
-        // 查看评价列表 - 客户端调用 /api/v1/{token}/profile/public/review/view/{profileId}/{page} (GET)
+        // 查看评价列表 - GET /api/v1/{token}/profile/public/review/view/{profileId}/{page}
         else if (operation.startsWith("profile/public/review/view/")) {
             requireMethod(exchange, "GET");
             String rest = operation.substring("profile/public/review/view/".length());
@@ -386,12 +384,12 @@ public final class LegacyHttpServer implements AutoCloseable {
             JsonObject result = store.getReviewPage(profileId, page);
             sendEnvelope(exchange, true, result, null);
         }
-        // 标记评价已读 - 客户端调用 /api/v1/{token}/profile/public/review/mark (POST)
+        // 标记评价已读 - POST /api/v1/{token}/profile/public/review/mark
         else if ("profile/public/review/mark".equals(operation)) {
             requireMethod(exchange, "POST");
             JsonObject request = readJsonObject(exchange);
-            if (!request.has("profileId") || !request.has("reviewIds")) {
-                throw new IllegalArgumentException("Missing profileId or reviewIds");
+            if (!request.has("reviewIds")) {
+                throw new IllegalArgumentException("Missing reviewIds");
             }
             JsonArray reviewIdsJson = request.getAsJsonArray("reviewIds");
             for (JsonElement element : reviewIdsJson) {
@@ -400,7 +398,7 @@ public final class LegacyHttpServer implements AutoCloseable {
             }
             sendEnvelope(exchange, true, gson.toJsonTree(true), null);
         }
-        // 标记所有评价已读 - 客户端调用 /api/v1/{token}/profile/public/review/mark/all (POST)
+        // 标记所有评价已读 - POST /api/v1/{token}/profile/public/review/mark/all
         else if ("profile/public/review/mark/all".equals(operation)) {
             requireMethod(exchange, "POST");
             JsonObject request = readJsonObject(exchange);
@@ -417,6 +415,7 @@ public final class LegacyHttpServer implements AutoCloseable {
         }
 
         // ==================== 举报 API ====================
+        // 举报评价 - POST /api/v1/{token}/profile/public/reports/create/review/{id}
         else if (operation.startsWith("profile/public/reports/create/review/")) {
             requireMethod(exchange, "POST");
             String idStr = operation.substring("profile/public/reports/create/review/".length());
@@ -434,6 +433,7 @@ public final class LegacyHttpServer implements AutoCloseable {
                 sendEnvelope(exchange, true, gson.toJsonTree(true), null);
             }
         }
+        // 举报回复 - POST /api/v1/{token}/profile/public/reports/create/response/{id}
         else if (operation.startsWith("profile/public/reports/create/response/")) {
             requireMethod(exchange, "POST");
             String idStr = operation.substring("profile/public/reports/create/response/".length());
@@ -462,6 +462,7 @@ public final class LegacyHttpServer implements AutoCloseable {
         }
 
         // ==================== 通知 API ====================
+        // 获取未读通知数 - GET /api/v1/{token}/profile/public/notifications/unread/count
         else if ("profile/public/notifications/unread/count".equals(operation)) {
             requireMethod(exchange, "GET");
             long count = store.getUnreadNotificationCount(account.userId);
@@ -469,6 +470,7 @@ public final class LegacyHttpServer implements AutoCloseable {
             response.addProperty("unreadCount", count);
             sendEnvelope(exchange, true, response, null);
         }
+        // 清除未读通知 - POST /api/v1/{token}/profile/public/notifications/clear
         else if ("profile/public/notifications/clear".equals(operation)) {
             requireMethod(exchange, "POST");
             store.clearUnreadNotifications(account.userId);

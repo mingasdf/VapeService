@@ -696,7 +696,7 @@ public final class FileStore {
         return record;
     }
 
-    // ==================== 列表（修复版 - 匹配 PublicProfileSummary） ====================
+    // ==================== 列表（修复版 - 完全匹配客户端 PublicProfileSummary） ====================
 
     public synchronized JsonObject listPublicProfiles(long userId, int page, int size, String sortBy, String searchQuery, List<String> tags) {
         java.util.stream.Stream<PublicProfileRecord> stream = state.profilesById.values().stream()
@@ -746,8 +746,10 @@ public final class FileStore {
         int end = Math.min(start + size, total);
         List<PublicProfileRecord> paged = all.subList(start, end);
         
+        // 构建 PagedResult 格式
         JsonObject result = new JsonObject();
         JsonArray content = new JsonArray();
+        
         for (PublicProfileRecord record : paged) {
             JsonObject summary = new JsonObject();
             summary.addProperty("profileId", record.profileId);
@@ -756,33 +758,41 @@ public final class FileStore {
             summary.addProperty("likes", record.likes);
             summary.addProperty("dislikes", record.dislikes);
             
+            // tags 数组
             JsonArray tagsArray = new JsonArray();
             for (String tag : record.tags) {
                 tagsArray.add(tag);
             }
             summary.add("tags", tagsArray);
             
+            // shareCode 可选
             if (record.shareCode != null) {
                 summary.addProperty("shareCode", record.shareCode);
             }
             
-            account(record.userId).ifPresent(acc -> {
-                if (!record.uploadAnonymously) {
+            // owner - 必须是 PublicProfileUser 格式
+            if (!record.uploadAnonymously) {
+                account(record.userId).ifPresent(acc -> {
                     JsonObject owner = new JsonObject();
                     owner.addProperty("userId", acc.userId);
                     owner.addProperty("username", acc.username);
                     summary.add("owner", owner);
-                }
-            });
+                });
+            } else {
+                // 匿名时 owner 为 null，但客户端可能期望 null
+                summary.add("owner", JsonNull.INSTANCE);
+            }
             
-            result.add("content", content);
+            content.add(summary);
         }
         
+        result.add("content", content);
         result.addProperty("last", end >= total);
         result.addProperty("totalPages", (int)Math.ceil((double)total / size));
         result.addProperty("totalElements", (long)total);
         result.addProperty("size", size);
         result.addProperty("numberOfElements", paged.size());
+        
         return result;
     }
 
@@ -1226,6 +1236,8 @@ public final class FileStore {
                 owner.addProperty("username", acc.username);
                 json.add("owner", owner);
             });
+        } else {
+            json.add("owner", JsonNull.INSTANCE);
         }
         
         // ShareInfo - PublicProfileShareInfo format
@@ -1240,7 +1252,7 @@ public final class FileStore {
         shareInfo.addProperty("unreadNotifications", record.unreadNotifications);
         json.add("shareInfo", shareInfo);
         
-        // Viewer Review - PublicProfileReview format
+        // Viewer Review
         if (viewer != null) {
             getReviewByUserAndProfile(viewer.userId, record.profileId).ifPresent(review -> {
                 json.add("viewerReview", buildReviewResponse(review));
@@ -1256,9 +1268,9 @@ public final class FileStore {
         }
         reviewsObj.add("content", reviewsArray);
         reviewsObj.addProperty("last", true);
-        reviewsObj.addProperty("totalPages", 1);
+        reviewsObj.addProperty("totalPages", Math.max(1, (int)Math.ceil((double)reviews.size() / 10)));
         reviewsObj.addProperty("totalElements", (long)reviews.size());
-        reviewsObj.addProperty("size", reviews.size());
+        reviewsObj.addProperty("size", Math.max(1, reviews.size()));
         reviewsObj.addProperty("numberOfElements", reviews.size());
         json.add("reviews", reviewsObj);
         
@@ -1358,7 +1370,7 @@ public final class FileStore {
         
         result.add("content", content);
         result.addProperty("last", end >= reviews.size());
-        result.addProperty("totalPages", (int)Math.ceil((double)reviews.size() / pageSize));
+        result.addProperty("totalPages", Math.max(1, (int)Math.ceil((double)reviews.size() / pageSize)));
         result.addProperty("totalElements", (long)reviews.size());
         result.addProperty("size", pageSize);
         result.addProperty("numberOfElements", content.size());

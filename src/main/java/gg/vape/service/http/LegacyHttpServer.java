@@ -204,7 +204,8 @@ public final class LegacyHttpServer implements AutoCloseable {
         else if ("profile/public/tags".equals(operation)) {
             requireMethod(exchange, "GET");
             int limit = parseQueryParam(exchange, "limit", 20);
-            sendEnvelope(exchange, true, store.getPopularTags(limit), null);
+            JsonObject tagsResult = store.getPopularTags(limit);
+            sendEnvelope(exchange, true, tagsResult, null);
         }
         // 列出配置 - POST /api/v1/{token}/profile/public/list
         else if ("profile/public/list".equals(operation)) {

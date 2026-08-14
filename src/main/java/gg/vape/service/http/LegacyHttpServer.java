@@ -334,12 +334,12 @@ public final class LegacyHttpServer implements AutoCloseable {
         } else if (operation.startsWith("profile/public/review/view/")) {
             requireMethod(exchange, "GET");
             String rest = operation.substring("profile/public/review/view/".length());
-            String[] parts = rest.split("/");
-            if (parts.length != 2) {
+            String[] parts1 = rest.split("/");
+            if (parts1.length != 2) {
                 throw new IllegalArgumentException("Invalid review view path");
             }
-            long profileId = Long.parseLong(parts[0]);
-            long page = Long.parseLong(parts[1]);
+            long profileId = Long.parseLong(parts1[0]);
+            long page = Long.parseLong(parts1[1]);
             sendEnvelope(exchange, true, store.getReviewPage(profileId, page), null);
         } else if ("profile/public/review/mark".equals(operation)) {
             requireMethod(exchange, "POST");

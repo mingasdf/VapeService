@@ -200,16 +200,19 @@ public final class LegacyHttpServer implements AutoCloseable {
         }
 
         // ==================== 云配市场 API ====================
+        // 获取标签 - 客户端调用 /api/v1/{token}/profile/public/tags
         else if ("profile/public/tags".equals(operation)) {
             requireMethod(exchange, "GET");
             int limit = parseQueryParam(exchange, "limit", 20);
             sendEnvelope(exchange, true, store.getPopularTags(limit), null);
-        } else if ("profile/public/list".equals(operation)) {
+        }
+        // 列出配置 - 客户端调用 /api/v1/{token}/profile/public/list (POST)
+        else if ("profile/public/list".equals(operation)) {
             requireMethod(exchange, "POST");
             JsonObject request = readJsonObject(exchange);
             int page = request.has("page") ? request.get("page").getAsInt() : 0;
             int size = request.has("size") ? request.get("size").getAsInt() : 20;
-            String sortBy = request.has("mode") ? request.get("mode").getAsString() : "updatedDate";
+            String sortBy = request.has("mode") ? request.get("mode").getAsString() : "rated";
             if (request.has("sortBy")) {
                 sortBy = request.get("sortBy").getAsString();
             }
@@ -222,11 +225,17 @@ public final class LegacyHttpServer implements AutoCloseable {
                 }
             }
             sendEnvelope(exchange, true, store.listPublicProfiles(account.userId, page, size, sortBy, searchQuery, tags.isEmpty() ? null : tags), null);
-        } else if ("profile/public/create".equals(operation)) {
+        }
+        // 创建配置 - 客户端调用 /api/v1/{token}/profile/public/create (POST)
+        else if ("profile/public/create".equals(operation)) {
             requireMethod(exchange, "POST");
-            PublicProfileRecord created = store.createPublicProfile(token, readJsonObject(exchange));
-            sendEnvelope(exchange, true, created.toJson(), null);
-        } else if ("profile/public/edit".equals(operation)) {
+            JsonObject request = readJsonObject(exchange);
+            PublicProfileRecord created = store.createPublicProfile(token, request);
+            // 返回客户端期望的格式 - 使用toClientJson
+            sendEnvelope(exchange, true, created.toClientJson(), null);
+        }
+        // 编辑配置 - 客户端调用 /api/v1/{token}/profile/public/edit (POST)
+        else if ("profile/public/edit".equals(operation)) {
             requireMethod(exchange, "POST");
             JsonObject request = readJsonObject(exchange);
             if (!request.has("profileId")) {
@@ -234,41 +243,65 @@ public final class LegacyHttpServer implements AutoCloseable {
             }
             long profileId = request.get("profileId").getAsLong();
             PublicProfileRecord updated = store.updatePublicProfile(token, profileId, request);
-            sendEnvelope(exchange, true, updated.toJson(), null);
-        } else if (operation.startsWith("profile/public/") && operation.endsWith("/delete")) {
+            sendEnvelope(exchange, true, updated.toClientJson(), null);
+        }
+        // 删除配置 - 客户端调用 /api/v1/{token}/profile/public/{id}/delete (DELETE)
+        else if (operation.startsWith("profile/public/") && operation.endsWith("/delete")) {
             requireMethod(exchange, "DELETE");
-            String id = operation.substring("profile/public/".length(), operation.length() - "/delete".length());
-            long profileId = Long.parseLong(id);
+            String idStr = operation.substring("profile/public/".length(), operation.length() - "/delete".length());
+            long profileId = Long.parseLong(idStr);
             boolean deleted = store.deletePublicProfileById(token, profileId);
             sendEnvelope(exchange, true, gson.toJsonTree(deleted), null);
-        } else if (operation.startsWith("profile/public/") && operation.endsWith("/view")) {
+        }
+        // 查看配置详情 - 客户端调用 /api/v1/{token}/profile/public/{id}/view (GET)
+        else if (operation.startsWith("profile/public/") && operation.endsWith("/view")) {
             requireMethod(exchange, "GET");
-            String id = operation.substring("profile/public/".length(), operation.length() - "/view".length());
-            long profileId = Long.parseLong(id);
+            String idStr = operation.substring("profile/public/".length(), operation.length() - "/view".length());
+            long profileId = Long.parseLong(idStr);
             JsonObject full = store.getProfileWithFullDetails(profileId, account.userId);
-            sendEnvelope(exchange, full != null, full != null ? full : JsonNull.INSTANCE, full != null ? null : "Profile not found");
-        } else if (operation.startsWith("profile/public/") && operation.endsWith("/download")) {
+            if (full == null) {
+                sendEnvelope(exchange, false, JsonNull.INSTANCE, "Profile not found");
+            } else {
+                sendEnvelope(exchange, true, full, null);
+            }
+        }
+        // 下载配置 - 客户端调用 /api/v1/{token}/profile/public/{id}/download (GET)
+        else if (operation.startsWith("profile/public/") && operation.endsWith("/download")) {
             requireMethod(exchange, "GET");
-            String id = operation.substring("profile/public/".length(), operation.length() - "/download".length());
-            long profileId = Long.parseLong(id);
+            String idStr = operation.substring("profile/public/".length(), operation.length() - "/download".length());
+            long profileId = Long.parseLong(idStr);
             Optional<PublicProfileRecord> profile = store.getPublicProfile(profileId);
             if (profile.isEmpty() || !profile.get().listedPublicly) {
                 sendEnvelope(exchange, false, JsonNull.INSTANCE, "Profile not found or not public");
             } else {
                 store.incrementDownloads(profileId);
-                sendEnvelope(exchange, true, profile.get().toJson(), null);
+                // 返回RemoteProfileData兼容格式
+                JsonObject response = new JsonObject();
+                response.addProperty("name", profile.get().name);
+                response.addProperty("vapeVersion", "4.21");
+                response.addProperty("profileId", profile.get().profileId);
+                response.addProperty("version", profile.get().version);
+                response.addProperty("updatedDate", profile.get().updatedDate);
+                if (profile.get().data != null) {
+                    response.add("data", profile.get().data.deepCopy());
+                }
+                sendEnvelope(exchange, true, response, null);
             }
-        } else if (operation.startsWith("profile/public/") && operation.endsWith("/update")) {
+        }
+        // 检查更新 - 客户端调用 /api/v1/{token}/profile/public/{id}/update (GET)
+        else if (operation.startsWith("profile/public/") && operation.endsWith("/update")) {
             requireMethod(exchange, "GET");
-            String id = operation.substring("profile/public/".length(), operation.length() - "/update".length());
-            long profileId = Long.parseLong(id);
+            String idStr = operation.substring("profile/public/".length(), operation.length() - "/update".length());
+            long profileId = Long.parseLong(idStr);
             JsonObject updateData = store.getProfileForUpdate(profileId);
             if (updateData == null) {
                 sendEnvelope(exchange, false, JsonNull.INSTANCE, "Profile not found");
             } else {
                 sendEnvelope(exchange, true, updateData, null);
             }
-        } else if ("profile/public/regenerate/sharecode".equals(operation)) {
+        }
+        // 重新生成分享码 - 客户端调用 /api/v1/{token}/profile/public/regenerate/sharecode (POST)
+        else if ("profile/public/regenerate/sharecode".equals(operation)) {
             requireMethod(exchange, "POST");
             JsonObject request = readJsonObject(exchange);
             if (!request.has("profileId")) {
@@ -279,7 +312,9 @@ public final class LegacyHttpServer implements AutoCloseable {
             JsonObject response = new JsonObject();
             response.addProperty("shareCode", newCode);
             sendEnvelope(exchange, true, response, null);
-        } else if (operation.startsWith("profile/public/sharecode/")) {
+        }
+        // 通过分享码获取配置 - 客户端调用 /api/v1/{token}/profile/public/sharecode/{code} (GET)
+        else if (operation.startsWith("profile/public/sharecode/")) {
             requireMethod(exchange, "GET");
             String shareCode = operation.substring("profile/public/sharecode/".length());
             Optional<PublicProfileRecord> profile = store.getPublicProfileByShareCode(shareCode);
@@ -289,14 +324,17 @@ public final class LegacyHttpServer implements AutoCloseable {
                 JsonObject full = store.getProfileWithFullDetails(profile.get().profileId, account.userId);
                 sendEnvelope(exchange, true, full, null);
             }
-        } else if (operation.startsWith("profile/public/") && operation.endsWith("/statistics")) {
+        }
+        // 统计信息 - 客户端调用 /api/v1/{token}/profile/public/{id}/statistics (GET)
+        else if (operation.startsWith("profile/public/") && operation.endsWith("/statistics")) {
             requireMethod(exchange, "GET");
-            String id = operation.substring("profile/public/".length(), operation.length() - "/statistics".length());
-            long profileId = Long.parseLong(id);
+            String idStr = operation.substring("profile/public/".length(), operation.length() - "/statistics".length());
+            long profileId = Long.parseLong(idStr);
             sendEnvelope(exchange, true, store.getProfileStatistics(profileId), null);
         }
 
         // ==================== 评价 API ====================
+        // 创建评价 - 客户端调用 /api/v1/{token}/profile/public/review/create (POST)
         else if ("profile/public/review/create".equals(operation)) {
             requireMethod(exchange, "POST");
             JsonObject request = readJsonObject(exchange);
@@ -307,31 +345,47 @@ public final class LegacyHttpServer implements AutoCloseable {
             String message = request.get("reason").getAsString();
             boolean liked = request.get("liked").getAsBoolean();
             PublicProfileReviewRecord review = store.createReview(token, profileId, message, liked);
-            sendEnvelope(exchange, true, review.toJson(), null);
-        } else if (operation.startsWith("profile/public/review/delete/")) {
+            JsonObject response = review.toJson();
+            store.account(review.userId).ifPresent(acc -> {
+                response.add("commenter", acc.accountJson());
+            });
+            sendEnvelope(exchange, true, response, null);
+        }
+        // 删除评价 - 客户端调用 /api/v1/{token}/profile/public/review/delete/{id} (DELETE)
+        else if (operation.startsWith("profile/public/review/delete/")) {
             requireMethod(exchange, "DELETE");
-            String id = operation.substring("profile/public/review/delete/".length());
-            long reviewId = Long.parseLong(id);
+            String idStr = operation.substring("profile/public/review/delete/".length());
+            long reviewId = Long.parseLong(idStr);
             boolean deleted = store.deleteReview(token, reviewId);
             sendEnvelope(exchange, true, gson.toJsonTree(deleted), null);
-        } else if (operation.startsWith("profile/public/review/respond/")) {
+        }
+        // 回复评价 - 客户端调用 /api/v1/{token}/profile/public/review/respond/{id} (POST)
+        else if (operation.startsWith("profile/public/review/respond/")) {
             requireMethod(exchange, "POST");
-            String id = operation.substring("profile/public/review/respond/".length());
-            long reviewId = Long.parseLong(id);
+            String idStr = operation.substring("profile/public/review/respond/".length());
+            long reviewId = Long.parseLong(idStr);
             JsonObject request = readJsonObject(exchange);
             if (!request.has("message")) {
                 throw new IllegalArgumentException("Missing message");
             }
             String message = request.get("message").getAsString();
             PublicProfileReviewResponseRecord responseRecord = store.createReviewResponse(token, reviewId, message);
-            sendEnvelope(exchange, true, responseRecord.toJson(), null);
-        } else if (operation.startsWith("profile/public/review/delete/response/")) {
+            JsonObject response = responseRecord.toJson();
+            store.account(responseRecord.userId).ifPresent(acc -> {
+                response.add("commenter", acc.accountJson());
+            });
+            sendEnvelope(exchange, true, response, null);
+        }
+        // 删除回复 - 客户端调用 /api/v1/{token}/profile/public/review/delete/response/{id} (DELETE)
+        else if (operation.startsWith("profile/public/review/delete/response/")) {
             requireMethod(exchange, "DELETE");
-            String id = operation.substring("profile/public/review/delete/response/".length());
-            long responseId = Long.parseLong(id);
+            String idStr = operation.substring("profile/public/review/delete/response/".length());
+            long responseId = Long.parseLong(idStr);
             boolean deleted = store.deleteReviewResponse(token, responseId);
             sendEnvelope(exchange, true, gson.toJsonTree(deleted), null);
-        } else if (operation.startsWith("profile/public/review/view/")) {
+        }
+        // 查看评价列表 - 客户端调用 /api/v1/{token}/profile/public/review/view/{profileId}/{page} (GET)
+        else if (operation.startsWith("profile/public/review/view/")) {
             requireMethod(exchange, "GET");
             String rest = operation.substring("profile/public/review/view/".length());
             String[] parts1 = rest.split("/");
@@ -340,8 +394,20 @@ public final class LegacyHttpServer implements AutoCloseable {
             }
             long profileId = Long.parseLong(parts1[0]);
             long page = Long.parseLong(parts1[1]);
-            sendEnvelope(exchange, true, store.getReviewPage(profileId, page), null);
-        } else if ("profile/public/review/mark".equals(operation)) {
+            JsonObject result = store.getReviewPage(profileId, page);
+            // 添加评论者信息
+            JsonArray content = result.getAsJsonArray("content");
+            for (JsonElement element : content) {
+                JsonObject reviewJson = element.getAsJsonObject();
+                long userId = reviewJson.get("userId").getAsLong();
+                store.account(userId).ifPresent(acc -> {
+                    reviewJson.add("commenter", acc.accountJson());
+                });
+            }
+            sendEnvelope(exchange, true, result, null);
+        }
+        // 标记评价已读 - 客户端调用 /api/v1/{token}/profile/public/review/mark (POST)
+        else if ("profile/public/review/mark".equals(operation)) {
             requireMethod(exchange, "POST");
             JsonObject request = readJsonObject(exchange);
             if (!request.has("profileId") || !request.has("reviewIds")) {
@@ -353,7 +419,9 @@ public final class LegacyHttpServer implements AutoCloseable {
                 store.markReviewRead(reviewId);
             }
             sendEnvelope(exchange, true, gson.toJsonTree(true), null);
-        } else if ("profile/public/review/mark/all".equals(operation)) {
+        }
+        // 标记所有评价已读 - 客户端调用 /api/v1/{token}/profile/public/review/mark/all (POST)
+        else if ("profile/public/review/mark/all".equals(operation)) {
             requireMethod(exchange, "POST");
             JsonObject request = readJsonObject(exchange);
             if (!request.has("profileId")) {
@@ -369,10 +437,11 @@ public final class LegacyHttpServer implements AutoCloseable {
         }
 
         // ==================== 举报 API ====================
+        // 举报评价 - 客户端调用 /api/v1/{token}/profile/public/reports/create/review/{id} (POST)
         else if (operation.startsWith("profile/public/reports/create/review/")) {
             requireMethod(exchange, "POST");
-            String id = operation.substring("profile/public/reports/create/review/".length());
-            long reviewId = Long.parseLong(id);
+            String idStr = operation.substring("profile/public/reports/create/review/".length());
+            long reviewId = Long.parseLong(idStr);
             JsonObject request = readJsonObject(exchange);
             if (!request.has("reason")) {
                 throw new IllegalArgumentException("Missing reason");
@@ -385,10 +454,12 @@ public final class LegacyHttpServer implements AutoCloseable {
                 store.createReport(token, review.profileId, reason, "");
                 sendEnvelope(exchange, true, gson.toJsonTree(true), null);
             }
-        } else if (operation.startsWith("profile/public/reports/create/response/")) {
+        }
+        // 举报回复 - 客户端调用 /api/v1/{token}/profile/public/reports/create/response/{id} (POST)
+        else if (operation.startsWith("profile/public/reports/create/response/")) {
             requireMethod(exchange, "POST");
-            String id = operation.substring("profile/public/reports/create/response/".length());
-            long responseId = Long.parseLong(id);
+            String idStr = operation.substring("profile/public/reports/create/response/".length());
+            long responseId = Long.parseLong(idStr);
             JsonObject request = readJsonObject(exchange);
             if (!request.has("reason")) {
                 throw new IllegalArgumentException("Missing reason");
@@ -398,7 +469,6 @@ public final class LegacyHttpServer implements AutoCloseable {
             if (response.isEmpty()) {
                 sendEnvelope(exchange, false, JsonNull.INSTANCE, "Response not found");
             } else {
-                // 查找关联的review获取profileId
                 long profileId = 0;
                 for (PublicProfileReviewRecord review : store.getReviewsForProfile(0)) {
                     if (review.responseId != null && review.responseId == responseId) {
@@ -414,20 +484,23 @@ public final class LegacyHttpServer implements AutoCloseable {
         }
 
         // ==================== 通知 API ====================
+        // 获取未读通知数 - 客户端调用 /api/v1/{token}/profile/public/notifications/unread/count (GET)
         else if ("profile/public/notifications/unread/count".equals(operation)) {
             requireMethod(exchange, "GET");
             long count = store.getUnreadNotificationCount(account.userId);
             JsonObject response = new JsonObject();
             response.addProperty("unreadCount", count);
             sendEnvelope(exchange, true, response, null);
-        } else if ("profile/public/notifications/clear".equals(operation)) {
+        }
+        // 清除通知 - 客户端调用 /api/v1/{token}/profile/public/notifications/clear (POST)
+        else if ("profile/public/notifications/clear".equals(operation)) {
             requireMethod(exchange, "POST");
             store.clearUnreadNotifications(account.userId);
             sendEnvelope(exchange, true, gson.toJsonTree(true), null);
         }
 
-        // ==================== 兼容旧API ====================
-        else if ("profile/public/tags".equals(operation) || "profile/public/tags/popular".equals(operation)) {
+        // ==================== 兼容旧API路径 ====================
+        else if ("profile/public/tags/popular".equals(operation)) {
             requireMethod(exchange, "GET");
             int limit = parseQueryParam(exchange, "limit", 20);
             sendEnvelope(exchange, true, store.getPopularTags(limit), null);
@@ -442,6 +515,14 @@ public final class LegacyHttpServer implements AutoCloseable {
             sendJson(exchange, 200, object("status", "UP"));
         } else if ("/admin/public-profiles".equals(path)) {
             sendJson(exchange, 200, store.publicProfiles());
+        } else if ("/admin/profiles".equals(path)) {
+            JsonObject result = new JsonObject();
+            JsonArray profiles = new JsonArray();
+            for (PublicProfileRecord record : store.getAllPublicProfiles()) {
+                profiles.add(record.toJson());
+            }
+            result.add("profiles", profiles);
+            sendJson(exchange, 200, result);
         } else {
             sendError(exchange, 404, "Unknown admin endpoint");
         }

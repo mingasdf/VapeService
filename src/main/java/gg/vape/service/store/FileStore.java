@@ -7,6 +7,7 @@ import com.google.gson.JsonElement;
 import com.google.gson.JsonNull;
 import com.google.gson.JsonObject;
 import com.google.gson.JsonParser;
+import com.google.gson.JsonSyntaxException;
 import java.io.IOException;
 import java.nio.charset.StandardCharsets;
 import java.nio.file.AtomicMoveNotSupportedException;
@@ -1186,13 +1187,23 @@ public final class FileStore {
         return HexFormat.of().formatHex(bytes);
     }
 
-    private ServiceState load() throws IOException {
+        private ServiceState load() throws IOException {
         if (!Files.exists(file)) {
             return new ServiceState();
         }
         String json = Files.readString(file, StandardCharsets.UTF_8);
-        ServiceState loaded = gson.fromJson(json, ServiceState.class);
-        return loaded == null ? new ServiceState() : loaded;
+        try {
+            ServiceState loaded = gson.fromJson(json, ServiceState.class);
+            return loaded == null ? new ServiceState() : loaded;
+        } catch (JsonSyntaxException e) {
+            // 如果解析失败，尝试修复损坏的数据
+            System.err.println("Failed to parse data file, attempting to recover: " + e.getMessage());
+            // 备份损坏的文件
+            Path backup = file.resolveSibling(file.getFileName() + ".corrupted");
+            Files.copy(file, backup, StandardCopyOption.REPLACE_EXISTING);
+            System.err.println("Corrupted file backed up to: " + backup);
+            return new ServiceState();
+        }
     }
 
     private void normalizeLoadedState() {
@@ -1230,7 +1241,14 @@ public final class FileStore {
             state.tagsByLowercase = new LinkedHashMap<>();
         }
         
+        // 修复 profilesById 中 data 字段为 null 的情况
         for (PublicProfileRecord profile : state.profilesById.values()) {
+            if (profile.data == null) {
+                profile.data = new JsonObject();
+            }
+            if (profile.tags == null) {
+                profile.tags = new ArrayList<>();
+            }
             for (String tag : profile.tags) {
                 updateTagUsage(tag, 1);
             }
@@ -1249,6 +1267,22 @@ public final class FileStore {
             }
             if (account.privateProfiles == null) {
                 account.privateProfiles = new LinkedHashMap<>();
+            }
+            if (account.globalSettings == null) {
+                account.globalSettings = AccountRecord.defaultGlobalSettings();
+            }
+            if (account.onlineSettings == null) {
+                account.onlineSettings = AccountRecord.defaultOnlineSettings();
+            }
+        }
+        
+        // 确保所有 token 的账户都有正确的字段
+        for (AccountRecord account : state.accountsByToken.values()) {
+            if (account.globalSettings == null) {
+                account.globalSettings = AccountRecord.defaultGlobalSettings();
+            }
+            if (account.onlineSettings == null) {
+                account.onlineSettings = AccountRecord.defaultOnlineSettings();
             }
         }
     }

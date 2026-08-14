@@ -56,14 +56,14 @@ public final class AccountRecord {
         }
     }
 
-    private static JsonObject defaultGlobalSettings() {
+    public static JsonObject defaultGlobalSettings() {
         JsonObject settings = new JsonObject();
         settings.addProperty("cache", false);
         settings.addProperty("firstRun", true);
         return settings;
     }
 
-    private static JsonObject defaultOnlineSettings() {
+    public static JsonObject defaultOnlineSettings() {
         JsonObject settings = new JsonObject();
         settings.addProperty("inventorySwitchMode", 0);
         settings.addProperty("partyShowTarget", true);

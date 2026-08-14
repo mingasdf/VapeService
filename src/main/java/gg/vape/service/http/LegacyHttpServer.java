@@ -323,7 +323,8 @@ public final class LegacyHttpServer implements AutoCloseable {
             requireMethod(exchange, "GET");
             String idStr = operation.substring("profile/public/".length(), operation.length() - "/statistics".length());
             long profileId = Long.parseLong(idStr);
-            sendEnvelope(exchange, true, store.getProfileStatistics(profileId), null);
+            JsonObject stats = store.getProfileStatistics(profileId);
+            sendEnvelope(exchange, true, stats, null);
         }
 
         // ==================== 评价 API ====================

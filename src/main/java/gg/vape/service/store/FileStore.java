@@ -1308,10 +1308,6 @@ public final class FileStore {
     public record PartyLeaveResult(boolean successful, PartyRecord party, long newLeaderId) {}
     public record LoaderLoginResult(String token, AccountRecord account) {}
 	
-	public synchronized List<PublicProfileRecord> getAllPublicProfiles() {
-        return new ArrayList<>(state.profilesById.values());
-    }
-	
 	public synchronized JsonObject buildPublicProfileResponse(PublicProfileRecord record, AccountRecord viewer) {
         JsonObject json = new JsonObject();
         json.addProperty("profileId", record.profileId);

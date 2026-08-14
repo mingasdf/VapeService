@@ -302,24 +302,6 @@ public final class FileStore {
         save();
     }
 
-    public record FriendRequestCreation(int status, FriendRequestRecord request, AccountRecord target) {
-    }
-
-    public record FriendRequestUpdate(int status, FriendRequestRecord request, AccountRecord other) {
-    }
-
-    public record PartyInviteResult(int status, PartyRecord party) {
-    }
-
-    public record PartyInviteDecision(int status, PartyRecord party) {
-    }
-
-    public record PartyLeaveResult(boolean successful, PartyRecord party, long newLeaderId) {
-    }
-
-    public record LoaderLoginResult(String token, AccountRecord account) {
-    }
-
     public synchronized AuthChallengeRecord createChallenge(String edition, String hwid) throws IOException {
         byte[] bytes = new byte[20];
         random.nextBytes(bytes);
@@ -501,101 +483,7 @@ public final class FileStore {
         return true;
     }
 
-    private AccountRecord requireAccount(String token) {
-        AccountRecord account = state.accountsByToken.get(token);
-        if (account == null) {
-            throw new IllegalArgumentException("Invalid access token");
-        }
-        return account;
-    }
-
-    private String randomToken() {
-        byte[] bytes = new byte[24];
-        random.nextBytes(bytes);
-        return HexFormat.of().formatHex(bytes);
-    }
-
-    private ServiceState load() throws IOException {
-        if (!Files.exists(file)) {
-            return new ServiceState();
-        }
-        String json = Files.readString(file, StandardCharsets.UTF_8);
-        ServiceState loaded = gson.fromJson(json, ServiceState.class);
-        return loaded == null ? new ServiceState() : loaded;
-    }
-
-    private void normalizeLoadedState() {
-        if (state.accountsByToken == null) {
-            state.accountsByToken = new LinkedHashMap<>();
-        }
-        if (state.challenges == null) {
-            state.challenges = new LinkedHashMap<>();
-        }
-        if (state.publicProfiles == null) {
-            state.publicProfiles = new LinkedHashMap<>();
-        }
-        if (state.friendRequests == null) {
-            state.friendRequests = new LinkedHashMap<>();
-        }
-        if (state.parties == null) {
-            state.parties = new LinkedHashMap<>();
-        }
-        if (state.profilesById == null) {
-            state.profilesById = new LinkedHashMap<>();
-        }
-        if (state.profilesByShareCode == null) {
-            state.profilesByShareCode = new LinkedHashMap<>();
-        }
-        if (state.reviewsById == null) {
-            state.reviewsById = new LinkedHashMap<>();
-        }
-        if (state.reviewResponsesById == null) {
-            state.reviewResponsesById = new LinkedHashMap<>();
-        }
-        if (state.reportsById == null) {
-            state.reportsById = new LinkedHashMap<>();
-        }
-        if (state.tagsByLowercase == null) {
-            state.tagsByLowercase = new LinkedHashMap<>();
-        }
-        
-        for (PublicProfileRecord profile : state.profilesById.values()) {
-            for (String tag : profile.tags) {
-                updateTagUsage(tag, 1);
-            }
-        }
-        
-        for (AccountRecord account : state.accountsByToken.values()) {
-            account.accountCreation = AccountRecord.normalizeTimestamp(account.accountCreation);
-            if (account.onlineFriends == null) {
-                account.onlineFriends = new java.util.LinkedHashSet<>();
-            }
-            if (account.localFriends == null) {
-                account.localFriends = new JsonArray();
-            }
-            if (account.otherData == null) {
-                account.otherData = new JsonArray();
-            }
-            if (account.privateProfiles == null) {
-                account.privateProfiles = new LinkedHashMap<>();
-            }
-        }
-    }
-
-    private void save() throws IOException {
-        Path parent = file.getParent();
-        if (parent != null) {
-            Files.createDirectories(parent);
-        }
-        Path temporary = file.resolveSibling(file.getFileName() + ".tmp");
-        Files.writeString(temporary, gson.toJson(state), StandardCharsets.UTF_8);
-        try {
-            Files.move(temporary, file, StandardCopyOption.REPLACE_EXISTING,
-                    StandardCopyOption.ATOMIC_MOVE);
-        } catch (AtomicMoveNotSupportedException ignored) {
-            Files.move(temporary, file, StandardCopyOption.REPLACE_EXISTING);
-        }
-    }
+    // ==================== 公共配置核心功能 ====================
 
     public synchronized PublicProfileRecord createPublicProfile(String token, JsonObject request) throws IOException {
         AccountRecord account = requireAccount(token);
@@ -622,17 +510,31 @@ public final class FileStore {
             }
         }
         
-        if (request.has("data")) {
-            record.data = request.get("data").getAsJsonObject().deepCopy();
+        if (request.has("profileData") || request.has("data")) {
+            JsonElement dataElement = request.has("profileData") ? request.get("profileData") : request.get("data");
+            if (dataElement.isJsonObject()) {
+                record.data = dataElement.getAsJsonObject().deepCopy();
+            }
         }
         
         record.shareCode = generateShareCode();
-        record.listedPublicly = request.has("listedPublicly") ? request.get("listedPublicly").getAsBoolean() : true;
+        record.listedPublicly = request.has("listed") ? request.get("listed").getAsBoolean() : true;
+        if (request.has("listedPublicly")) {
+            record.listedPublicly = request.get("listedPublicly").getAsBoolean();
+        }
         record.shareCodeFriendsOnly = request.has("shareCodeFriendsOnly") ? request.get("shareCodeFriendsOnly").getAsBoolean() : false;
-        record.uploadAnonymously = request.has("uploadAnonymously") ? request.get("uploadAnonymously").getAsBoolean() : false;
+        record.uploadAnonymously = request.has("anonymous") ? request.get("anonymous").getAsBoolean() : false;
+        if (request.has("uploadAnonymously")) {
+            record.uploadAnonymously = request.get("uploadAnonymously").getAsBoolean();
+        }
         
         if (request.has("derivedFrom")) {
-            record.derivedFrom = request.get("derivedFrom").getAsLong();
+            String derivedFromStr = request.get("derivedFrom").getAsString();
+            if (derivedFromStr != null && !derivedFromStr.isEmpty()) {
+                try {
+                    record.derivedFrom = Long.parseLong(derivedFromStr);
+                } catch (NumberFormatException ignored) {}
+            }
         }
         
         state.profilesById.put(record.profileId, record);
@@ -673,18 +575,25 @@ public final class FileStore {
             }
         }
         
-        if (request.has("data")) {
-            existing.data = request.get("data").getAsJsonObject().deepCopy();
+        if (request.has("profileData") || request.has("data")) {
+            JsonElement dataElement = request.has("profileData") ? request.get("profileData") : request.get("data");
+            if (dataElement.isJsonObject()) {
+                existing.data = dataElement.getAsJsonObject().deepCopy();
+            }
         }
         
+        if (request.has("listed")) {
+            existing.listedPublicly = request.get("listed").getAsBoolean();
+        }
         if (request.has("listedPublicly")) {
             existing.listedPublicly = request.get("listedPublicly").getAsBoolean();
         }
-        
         if (request.has("shareCodeFriendsOnly")) {
             existing.shareCodeFriendsOnly = request.get("shareCodeFriendsOnly").getAsBoolean();
         }
-        
+        if (request.has("anonymous")) {
+            existing.uploadAnonymously = request.get("anonymous").getAsBoolean();
+        }
         if (request.has("uploadAnonymously")) {
             existing.uploadAnonymously = request.get("uploadAnonymously").getAsBoolean();
         }
@@ -707,7 +616,7 @@ public final class FileStore {
         return Optional.empty();
     }
 
-    public synchronized boolean deletePublicProfile(String token, long profileId) throws IOException {
+    public synchronized boolean deletePublicProfileById(String token, long profileId) throws IOException {
         AccountRecord account = requireAccount(token);
         PublicProfileRecord existing = state.profilesById.get(profileId);
         if (existing == null || existing.userId != account.userId) {
@@ -820,6 +729,8 @@ public final class FileStore {
         return result;
     }
 
+    // ==================== 评价功能 ====================
+
     public synchronized PublicProfileReviewRecord createReview(String token, long profileId, String message, boolean liked) throws IOException {
         AccountRecord account = requireAccount(token);
         PublicProfileRecord profile = state.profilesById.get(profileId);
@@ -908,6 +819,10 @@ public final class FileStore {
         return true;
     }
 
+    public synchronized PublicProfileReviewRecord getReview(long reviewId) {
+        return state.reviewsById.get(reviewId);
+    }
+
     public synchronized List<PublicProfileReviewRecord> getReviewsForProfile(long profileId) {
         return state.reviewsById.values().stream()
             .filter(r -> r.profileId == profileId)
@@ -948,6 +863,8 @@ public final class FileStore {
         save();
     }
 
+    // ==================== 评价回复功能 ====================
+
     public synchronized PublicProfileReviewResponseRecord createReviewResponse(String token, long reviewId, String response) throws IOException {
         AccountRecord account = requireAccount(token);
         PublicProfileReviewRecord review = state.reviewsById.get(reviewId);
@@ -977,6 +894,28 @@ public final class FileStore {
     public synchronized Optional<PublicProfileReviewResponseRecord> getReviewResponse(long responseId) {
         return Optional.ofNullable(state.reviewResponsesById.get(responseId));
     }
+
+    public synchronized boolean deleteReviewResponse(String token, long responseId) throws IOException {
+        AccountRecord account = requireAccount(token);
+        PublicProfileReviewResponseRecord response = state.reviewResponsesById.get(responseId);
+        if (response == null || response.userId != account.userId) {
+            return false;
+        }
+        
+        state.reviewResponsesById.remove(responseId);
+        
+        for (PublicProfileReviewRecord review : state.reviewsById.values()) {
+            if (review.responseId != null && review.responseId == responseId) {
+                review.responseId = null;
+                break;
+            }
+        }
+        
+        save();
+        return true;
+    }
+
+    // ==================== 举报功能 ====================
 
     public synchronized PublicProfileReportRecord createReport(String token, long profileId, String reason, String details) throws IOException {
         AccountRecord account = requireAccount(token);
@@ -1022,6 +961,8 @@ public final class FileStore {
         return true;
     }
 
+    // ==================== 标签功能 ====================
+
     public synchronized JsonObject getPopularTags(int limit) {
         JsonArray tagsArray = new JsonArray();
         List<PublicProfileTagRecord> tags = state.tagsByLowercase.values().stream()
@@ -1053,6 +994,8 @@ public final class FileStore {
         }
     }
 
+    // ==================== 分享码功能 ====================
+
     public synchronized String regenerateShareCode(String token, long profileId) throws IOException {
         AccountRecord account = requireAccount(token);
         PublicProfileRecord profile = state.profilesById.get(profileId);
@@ -1074,7 +1017,6 @@ public final class FileStore {
     private String generateShareCode() {
         String chars = "ABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789";
         StringBuilder code = new StringBuilder();
-        SecureRandom random = new SecureRandom();
         for (int i = 0; i < 8; i++) {
             code.append(chars.charAt(random.nextInt(chars.length())));
         }
@@ -1088,6 +1030,8 @@ public final class FileStore {
         }
         return newCode;
     }
+
+    // ==================== 统计功能 ====================
 
     public synchronized JsonObject getProfileStatistics(long profileId) {
         PublicProfileRecord profile = state.profilesById.get(profileId);
@@ -1159,4 +1103,169 @@ public final class FileStore {
         
         return full;
     }
+
+    public synchronized JsonObject getProfileForUpdate(long profileId) {
+        PublicProfileRecord profile = state.profilesById.get(profileId);
+        if (profile == null || !profile.listedPublicly) {
+            return null;
+        }
+        
+        JsonObject result = new JsonObject();
+        result.addProperty("profileId", profile.profileId);
+        result.addProperty("name", profile.name);
+        result.addProperty("version", profile.version);
+        result.addProperty("updatedDate", profile.updatedDate);
+        if (profile.data != null) {
+            result.add("data", profile.data.deepCopy());
+        }
+        
+        return result;
+    }
+
+    // ==================== 分页获取评价 ====================
+
+    public synchronized JsonObject getReviewPage(long profileId, long page) {
+        List<PublicProfileReviewRecord> reviews = getReviewsForProfile(profileId);
+        int pageSize = 10;
+        int start = (int)(page * pageSize);
+        int end = Math.min(start + pageSize, reviews.size());
+        
+        if (start >= reviews.size()) {
+            JsonObject emptyResult = new JsonObject();
+            emptyResult.add("content", new JsonArray());
+            emptyResult.addProperty("last", true);
+            emptyResult.addProperty("totalPages", (int)Math.ceil((double)reviews.size() / pageSize));
+            emptyResult.addProperty("totalElements", reviews.size());
+            emptyResult.addProperty("size", pageSize);
+            emptyResult.addProperty("numberOfElements", 0);
+            return emptyResult;
+        }
+        
+        List<PublicProfileReviewRecord> paged = reviews.subList(start, end);
+        
+        JsonObject result = new JsonObject();
+        JsonArray content = new JsonArray();
+        for (PublicProfileReviewRecord review : paged) {
+            JsonObject reviewJson = review.toJson();
+            account(review.userId).ifPresent(acc -> {
+                reviewJson.add("commenter", acc.accountJson());
+            });
+            if (review.responseId != null) {
+                getReviewResponse(review.responseId).ifPresent(response -> {
+                    reviewJson.add("response", response.toJson());
+                });
+            }
+            content.add(reviewJson);
+        }
+        result.add("content", content);
+        result.addProperty("last", end >= reviews.size());
+        result.addProperty("totalPages", (int)Math.ceil((double)reviews.size() / pageSize));
+        result.addProperty("totalElements", reviews.size());
+        result.addProperty("size", pageSize);
+        result.addProperty("numberOfElements", paged.size());
+        return result;
+    }
+
+    private AccountRecord requireAccount(String token) {
+        AccountRecord account = state.accountsByToken.get(token);
+        if (account == null) {
+            throw new IllegalArgumentException("Invalid access token");
+        }
+        return account;
+    }
+
+    private String randomToken() {
+        byte[] bytes = new byte[24];
+        random.nextBytes(bytes);
+        return HexFormat.of().formatHex(bytes);
+    }
+
+    private ServiceState load() throws IOException {
+        if (!Files.exists(file)) {
+            return new ServiceState();
+        }
+        String json = Files.readString(file, StandardCharsets.UTF_8);
+        ServiceState loaded = gson.fromJson(json, ServiceState.class);
+        return loaded == null ? new ServiceState() : loaded;
+    }
+
+    private void normalizeLoadedState() {
+        if (state.accountsByToken == null) {
+            state.accountsByToken = new LinkedHashMap<>();
+        }
+        if (state.challenges == null) {
+            state.challenges = new LinkedHashMap<>();
+        }
+        if (state.publicProfiles == null) {
+            state.publicProfiles = new LinkedHashMap<>();
+        }
+        if (state.friendRequests == null) {
+            state.friendRequests = new LinkedHashMap<>();
+        }
+        if (state.parties == null) {
+            state.parties = new LinkedHashMap<>();
+        }
+        if (state.profilesById == null) {
+            state.profilesById = new LinkedHashMap<>();
+        }
+        if (state.profilesByShareCode == null) {
+            state.profilesByShareCode = new LinkedHashMap<>();
+        }
+        if (state.reviewsById == null) {
+            state.reviewsById = new LinkedHashMap<>();
+        }
+        if (state.reviewResponsesById == null) {
+            state.reviewResponsesById = new LinkedHashMap<>();
+        }
+        if (state.reportsById == null) {
+            state.reportsById = new LinkedHashMap<>();
+        }
+        if (state.tagsByLowercase == null) {
+            state.tagsByLowercase = new LinkedHashMap<>();
+        }
+        
+        for (PublicProfileRecord profile : state.profilesById.values()) {
+            for (String tag : profile.tags) {
+                updateTagUsage(tag, 1);
+            }
+        }
+        
+        for (AccountRecord account : state.accountsByToken.values()) {
+            account.accountCreation = AccountRecord.normalizeTimestamp(account.accountCreation);
+            if (account.onlineFriends == null) {
+                account.onlineFriends = new java.util.LinkedHashSet<>();
+            }
+            if (account.localFriends == null) {
+                account.localFriends = new JsonArray();
+            }
+            if (account.otherData == null) {
+                account.otherData = new JsonArray();
+            }
+            if (account.privateProfiles == null) {
+                account.privateProfiles = new LinkedHashMap<>();
+            }
+        }
+    }
+
+    private void save() throws IOException {
+        Path parent = file.getParent();
+        if (parent != null) {
+            Files.createDirectories(parent);
+        }
+        Path temporary = file.resolveSibling(file.getFileName() + ".tmp");
+        Files.writeString(temporary, gson.toJson(state), StandardCharsets.UTF_8);
+        try {
+            Files.move(temporary, file, StandardCopyOption.REPLACE_EXISTING,
+                    StandardCopyOption.ATOMIC_MOVE);
+        } catch (AtomicMoveNotSupportedException ignored) {
+            Files.move(temporary, file, StandardCopyOption.REPLACE_EXISTING);
+        }
+    }
+
+    public record FriendRequestCreation(int status, FriendRequestRecord request, AccountRecord target) {}
+    public record FriendRequestUpdate(int status, FriendRequestRecord request, AccountRecord other) {}
+    public record PartyInviteResult(int status, PartyRecord party) {}
+    public record PartyInviteDecision(int status, PartyRecord party) {}
+    public record PartyLeaveResult(boolean successful, PartyRecord party, long newLeaderId) {}
+    public record LoaderLoginResult(String token, AccountRecord account) {}
 }

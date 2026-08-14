@@ -510,8 +510,14 @@ public final class FileStore {
             }
         }
         
-        if (request.has("profileData") || request.has("data")) {
-            JsonElement dataElement = request.has("profileData") ? request.get("profileData") : request.get("data");
+        // 处理 profileData 或 data 字段
+        if (request.has("profileData")) {
+            JsonElement dataElement = request.get("profileData");
+            if (dataElement.isJsonObject()) {
+                record.data = dataElement.getAsJsonObject().deepCopy();
+            }
+        } else if (request.has("data")) {
+            JsonElement dataElement = request.get("data");
             if (dataElement.isJsonObject()) {
                 record.data = dataElement.getAsJsonObject().deepCopy();
             }
@@ -1268,4 +1274,8 @@ public final class FileStore {
     public record PartyInviteDecision(int status, PartyRecord party) {}
     public record PartyLeaveResult(boolean successful, PartyRecord party, long newLeaderId) {}
     public record LoaderLoginResult(String token, AccountRecord account) {}
+	
+	public synchronized List<PublicProfileRecord> getAllPublicProfiles() {
+        return new ArrayList<>(state.profilesById.values());
+    }
 }

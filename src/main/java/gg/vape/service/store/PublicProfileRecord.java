@@ -62,6 +62,37 @@ public final class PublicProfileRecord {
         return json;
     }
 
+    // 为客户端API兼容的toJson格式
+    public JsonObject toClientJson() {
+        JsonObject json = new JsonObject();
+        json.addProperty("profileId", profileId);
+        json.addProperty("name", name);
+        json.addProperty("description", description != null ? description : "");
+        JsonArray tagsArray = new JsonArray();
+        for (String tag : tags) {
+            tagsArray.add(tag);
+        }
+        json.add("tags", tagsArray);
+        if (data != null) {
+            json.add("data", data.deepCopy());
+        }
+        json.addProperty("shareCode", shareCode);
+        json.addProperty("version", version);
+        json.addProperty("likes", likes);
+        json.addProperty("dislikes", dislikes);
+        json.addProperty("downloads", downloads);
+        json.addProperty("creationDate", creationDate);
+        json.addProperty("updatedDate", updatedDate);
+        json.addProperty("listedPublicly", listedPublicly);
+        json.addProperty("shareCodeFriendsOnly", shareCodeFriendsOnly);
+        json.addProperty("uploadAnonymously", uploadAnonymously);
+        if (derivedFrom != null) {
+            json.addProperty("derivedFrom", derivedFrom);
+        }
+        json.addProperty("unreadNotifications", unreadNotifications);
+        return json;
+    }
+
     public static PublicProfileRecord fromJson(JsonObject json) {
         PublicProfileRecord record = new PublicProfileRecord();
         if (json.has("profileId")) record.profileId = json.get("profileId").getAsLong();
